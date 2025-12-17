@@ -1,87 +1,80 @@
 #include <Arduino.h>
-#include <RadioLib.h>
 #include <SPI.h>
+#include <RadioLib.h>
 
-/*
- * TELEMETRÍA MADFT06 - RECEPTOR (GROUND STATION)
- * Hardware: Heltec WiFi LoRa 32 V3
- * Función: Recibir paquetes CSV y mostrar calidad de enlace.
- */
+// --- PINES (Mismos que TX) ---
+#define LORA_NSS 8
+#define LORA_DIO1 14
+#define LORA_RST 12
+#define LORA_BUSY 13
+#define LORA_SCK 9
+#define LORA_MISO 11
+#define LORA_MOSI 10
 
-// --- PINES LORA (Heltec V3) ---
-#define LORA_NSS    8
-#define LORA_SCK    9
-#define LORA_MOSI   10
-#define LORA_MISO   11
-#define LORA_RST    12
-#define LORA_DIO1   14
-#define LORA_BUSY   13 
+// --- ESTRUCTURA BINARIA (Idéntica al TX) ---
+struct __attribute__((packed)) TelemetryPacket {
+  uint32_t packetId;
+  uint16_t canId;
+  uint8_t  len;
+  uint8_t  data[8];
+} packet;
 
-// --- OBJETOS ---
-// Usamos un bus SPI dedicado igual que en el emisor para máxima compatibilidad
-SPIClass loraSPI(HSPI); 
+SPIClass loraSPI(HSPI);
 SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY, loraSPI);
 
+volatile bool rxFlag = false;
+
+#if defined(ESP8266) || defined(ESP32)
+  ICACHE_RAM_ATTR
+#endif
+void setFlag(void) {
+  rxFlag = true;
+}
+
 void setup() {
-  Serial.begin(115200);
-  delay(2000);
-  Serial.println("\n--- INICIANDO ESTACIÓN DE TIERRA (RX) ---");
-
-  // 1. INICIALIZAR SPI
+  Serial.begin(921600); // IMPORTANTE: Ajusta tu Monitor Serie a esta velocidad
+  
   loraSPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_NSS);
-
-  // 2. INICIALIZAR LORA
-  // IMPORTANTE: Estos valores DEBEN ser idénticos al Transmisor
-  // Freq: 868.0 MHz, BW: 125.0 kHz, SF: 9, CR: 4/7, SyncWord: 0x12
-  Serial.print("[LoRa] Iniciando Radio... ");
-  //int state = radio.begin(868.0, 125.0, 9, 7, 0x12, 22); // PREDET
-  int state = radio.begin(868.0, 62.5, 10, 6, 0x12, 22);
-
-
-  if (state == RADIOLIB_ERR_NONE) {
-    Serial.println("EXITO!");
-  } else {
-    Serial.print("FALLO, código: ");
-    Serial.println(state);
-    while (true);
-  }
+  
+  // MISMA CONFIGURACIÓN QUE TX
+  int state = radio.begin(868.0, 500.0, 7, 5, 0x12, 22);
+  
+  radio.setDio1Action(setFlag);
+  
+  // Empezar a escuchar
+  radio.startReceive();
 }
 
 void loop() {
-  // Buffer para el paquete recibido
-  String str;
-  
-  // Escuchamos (bloqueante o con interrupción, usamos simple receive por ahora)
-  int state = radio.receive(str);
+  if(rxFlag) {
+    rxFlag = false;
+    
+    // Leemos los datos binarios en la estructura
+    int state = radio.readData((uint8_t*)&packet, sizeof(packet));
 
-  if (state == RADIOLIB_ERR_NONE) {
-    // --- PAQUETE RECIBIDO ---
+    if (state == RADIOLIB_ERR_NONE) {
+      // --- CONVERSIÓN A CSV PARA TU SOFTWARE DE PC ---
+      // Reconstruimos el formato: ID, CAN_ID, BYTES...
+      
+      Serial.print(packet.packetId);
+      Serial.print(",");
+      Serial.print(packet.canId, HEX);
+      
+      for(int i=0; i<packet.len; i++) {
+        Serial.print(",");
+        // Formato hex limpio (ej. 0A en vez de A)
+        if(packet.data[i] < 0x10) Serial.print("0");
+        Serial.print(packet.data[i], HEX);
+      }
+      
+      // Diagnóstico (Opcional, quítalo si molesta a tu Python)
+      Serial.print(" | RSSI:");
+      Serial.print(radio.getRSSI());
+      Serial.println();
+      
+    }
     
-    // 1. Imprimir los datos crudos (CSV)
-    Serial.print("RX >> ");
-    Serial.print(str);
-    
-    // 2. Imprimir Diagnóstico de Señal (CRÍTICO para Telemetría)
-    // RSSI: Potencia de señal (dBm). 
-    //       > -100 excelente. 
-    //       < -120 riesgo de pérdida.
-    Serial.print(" | RSSI: ");
-    Serial.print(radio.getRSSI());
-    Serial.print(" dBm");
-    
-    // SNR: Relación Señal/Ruido. 
-    //      Positivo es perfecto. 
-    //      Negativo (ej: -10) es aceptable en LoRa (señal bajo el ruido).
-    Serial.print(" | SNR: ");
-    Serial.print(radio.getSNR());
-    Serial.println(" dB");
-
-  } else if (state == RADIOLIB_ERR_RX_TIMEOUT) {
-    // Tiempo de espera agotado (normal si el coche no envía nada)
-    // No imprimimos nada para no ensuciar el log
-  } else {
-    // Algún error de recepción (CRC, Header, etc.)
-    Serial.print("[LoRa] Error RX: ");
-    Serial.println(state);
+    // Volver a escuchar inmediatamente
+    radio.startReceive();
   }
 }

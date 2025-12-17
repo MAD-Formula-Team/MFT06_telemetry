@@ -3,127 +3,99 @@
 #include <mcp_can.h>
 #include <RadioLib.h>
 
-/* * TELEMETRÍA MADFT06 - LECTOR Y TRANSMISOR
- * Objetivo: Leer CAN Bus, mostrar datos en pantalla y enviarlos por LoRa.
- */
-
 // --- PINES ---
-#define LORA_NSS    8
-#define LORA_SCK    9
-#define LORA_MOSI   10
-#define LORA_MISO   11
-#define LORA_RST    12
-#define LORA_DIO1   14
-#define LORA_BUSY   13 
+#define LORA_NSS 8
+#define LORA_DIO1 14
+#define LORA_RST 12
+#define LORA_BUSY 13
+#define LORA_SCK 9
+#define LORA_MISO 11
+#define LORA_MOSI 10
 
-#define CAN_CS      34
-#define CAN_MOSI    35
-#define CAN_MISO    33
-#define CAN_SCK     36
-// Nota: En modo polling no usamos el pin INT, leemos directamente del chip.
+#define CAN_CS 34
+#define CAN_SCK 36
+#define CAN_MISO 33
+#define CAN_MOSI 35
+
+// --- ESTRUCTURA DE DATOS BINARIA (14 Bytes) ---
+// Enviar esto es 3 veces más rápido que enviar String
+struct __attribute__((packed)) TelemetryPacket {
+  uint32_t packetId; // 4 bytes
+  uint16_t canId;    // 2 bytes (Suficiente para ID estándar)
+  uint8_t  len;      // 1 byte
+  uint8_t  data[8];  // 8 bytes
+} packet;
 
 // --- OBJETOS ---
-SPIClass loraSPI(HSPI); 
+SPIClass loraSPI(HSPI);
 SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY, loraSPI);
-MCP_CAN CAN0(CAN_CS); 
+MCP_CAN CAN0(CAN_CS);
 
 // --- VARIABLES ---
-bool hardwareReady = false;
-long unsigned int rxId;
-unsigned char len = 0;
-unsigned char rxBuf[8];
-uint32_t packetCounter = 0;
-unsigned long lastHeartbeat = 0;
+volatile bool txDone = true;
+uint32_t counter = 0;
+
+// Interrupción
+#if defined(ESP8266) || defined(ESP32)
+  ICACHE_RAM_ATTR
+#endif
+void setFlag(void) {
+  txDone = true;
+}
 
 void setup() {
-  Serial.begin(115200);
-  delay(2000); // Esperamos 2s para que te dé tiempo a abrir el monitor
-  Serial.println("\n\n--- INICIANDO SISTEMA DE LECTURA CAN ---");
-
-  // 1. INICIALIZAR SPI GLOBAL (CAN)
-  SPI.begin(CAN_SCK, CAN_MISO, CAN_MOSI, CAN_CS);
-
-  // 2. INICIALIZAR MCP2515
-  // IMPORTANTE: Ajusta MCP_8MHZ o MCP_16MHZ según lo que ponga en tu cristal plateado
-  if(CAN0.begin(MCP_ANY, CAN_500KBPS, MCP_8MHZ) == CAN_OK) {
-    Serial.println("[CAN]  Hardware OK -> Escuchando a 500kbps...");
-    CAN0.setMode(MCP_NORMAL);
-    hardwareReady = true;
-  } else {
-    Serial.println("[CAN]  FALLO: No se detecta el módulo MCP2515.");
-    Serial.println("       -> Revisa: 5V, Cables SPI, Jumper de Terminación.");
-    hardwareReady = false;
-  }
-
-  // 3. INICIALIZAR LORA
-  loraSPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_NSS);
-
-  //int state = radio.begin(868.0, 125.0, 9, 7, 0x12, 22); // Predeterminada
-
-  // Freq: 868.0
-  // BW: 62.5 kHz (Buen balance ruido/velocidad)
-  // SF: 10 (Sensibilidad de -130dBm, excelente para 1-3km) 
-  // CR: 6 (4/6, suficiente corrección)
-  // Pwr: 22 (Máxima potencia)
-
-  int state = radio.begin(868.0, 62.5, 10, 6, 0x12, 22);
-  if (state == RADIOLIB_ERR_NONE) {
-    Serial.println("[LoRa] Hardware OK -> Radio lista.");
-  } else {
-    Serial.print("[LoRa] FALLO código: "); Serial.println(state);
-  }
+  // VELOCIDAD SERIAL MAXIMA para depuración
+  Serial.begin(921600);
   
-  Serial.println("------------------------------------------------");
-  Serial.println("ID (HEX)\tDLC\tDATOS (HEX)\t\tESTADO TX");
-  Serial.println("------------------------------------------------");
+  // 1. CAN
+  SPI.begin(CAN_SCK, CAN_MISO, CAN_MOSI, CAN_CS);
+  if(CAN0.begin(MCP_ANY, CAN_500KBPS, MCP_8MHZ) == CAN_OK) { // ¡REVISA TU CRISTAL!
+    CAN0.setMode(MCP_NORMAL);
+  } else {
+    while(1); // Fallo hardware
+  }
+
+  // 2. LORA - CONFIGURACIÓN "F1" (Max Speed)
+  loraSPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_NSS);
+  
+  // Freq: 868.0
+  // BW: 500.0 (Máximo ancho de banda = Menor tiempo de aire)
+  // SF: 7 (Spread Factor mínimo = Mayor velocidad)
+  // CR: 5 (4/5 = Mínima redundancia, corrección de errores básica)
+  int state = radio.begin(868.0, 500.0, 7, 5, 0x12, 22);
+  
+  radio.setDio1Action(setFlag);
+
+  if (state != RADIOLIB_ERR_NONE) {
+    while(1);
+  }
 }
 
 void loop() {
-  if (!hardwareReady) return;
-
-  // --- LECTURA CAN (POLLING) ---
-  // Preguntamos al chip: "¿Tienes mensajes nuevos?"
+  // Leer CAN constantemente
   if(CAN0.checkReceive() == CAN_MSGAVAIL) {
+    long unsigned int rxId;
+    unsigned char len;
+    unsigned char rxBuf[8];
     
-    // Leemos el mensaje
-    byte readStatus = CAN0.readMsgBuf(&rxId, &len, rxBuf);
-    
-    if(readStatus == CAN_OK) {
-        // 1. VISUALIZAR EN PANTALLA (Lo que pediste)
-        Serial.print("0x");
-        Serial.print(rxId, HEX);
-        Serial.print("\t\t");
-        Serial.print(len);
-        Serial.print("\t");
-        
-        // Construimos el paquete para LoRa
-        String packet = String(packetCounter++) + "," + String(rxId, HEX);
-        
-        for(int i = 0; i<len; i++){
-          if(rxBuf[i] < 0x10) { Serial.print("0"); packet += ",0"; } // Cero a la izquierda estético
-          else { packet += ","; }
-          
-          Serial.print(rxBuf[i], HEX);
-          Serial.print(" ");
-          
-          packet += String(rxBuf[i], HEX);
-        }
+    CAN0.readMsgBuf(&rxId, &len, rxBuf);
 
-        // 2. ENVIAR POR LORA
-        int state = radio.startTransmit(packet); // Usamos startTransmit (No bloqueante)
-        
-        if (state == RADIOLIB_ERR_NONE) {
-           Serial.println("\t-> Enviando..."); 
-        } else {
-           Serial.print("\t-> Error LoRa: "); Serial.println(state);
-        }
+    // Si la radio está libre, enviamos el binario
+    if(txDone) {
+      txDone = false; // Marcamos ocupado
+
+      // Llenamos la estructura (Super rápido)
+      packet.packetId = counter++;
+      packet.canId = (uint16_t)rxId;
+      packet.len = len;
+      memcpy(packet.data, rxBuf, 8); // Copia de memoria directa
+
+      // Enviamos raw bytes (tamaño fijo de 15 bytes aprox)
+      // Tiempo de aire estimado: ~4ms
+      radio.startTransmit((uint8_t*)&packet, sizeof(packet));
+      
+      // Feedback visual mínimo (un punto) para no frenar el micro
+      Serial.write('.'); 
     }
-  }
-  
-  // Heartbeat: Imprime un punto cada segundo si no hay tráfico CAN
-  // Para que sepas que el ESP32 no se ha colgado.
-  if (millis() - lastHeartbeat > 1000) {
-    if(CAN0.checkReceive() != CAN_MSGAVAIL) Serial.print("."); 
-    lastHeartbeat = millis();
   }
 }
