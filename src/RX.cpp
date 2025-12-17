@@ -34,7 +34,9 @@ void setup() {
   // IMPORTANTE: Estos valores DEBEN ser idénticos al Transmisor
   // Freq: 868.0 MHz, BW: 125.0 kHz, SF: 9, CR: 4/7, SyncWord: 0x12
   Serial.print("[LoRa] Iniciando Radio... ");
-  int state = radio.begin(868.0, 125.0, 9, 7, 0x12, 22);
+  //int state = radio.begin(868.0, 125.0, 9, 7, 0x12, 22); // PREDET
+  int state = radio.begin(868.0, 62.5, 10, 6, 0x12, 22);
+
 
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println("EXITO!");

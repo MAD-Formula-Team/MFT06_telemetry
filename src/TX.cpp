@@ -57,7 +57,16 @@ void setup() {
 
   // 3. INICIALIZAR LORA
   loraSPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_NSS);
-  int state = radio.begin(868.0, 125.0, 9, 7, 0x12, 22);
+
+  //int state = radio.begin(868.0, 125.0, 9, 7, 0x12, 22); // Predeterminada
+
+  // Freq: 868.0
+  // BW: 62.5 kHz (Buen balance ruido/velocidad)
+  // SF: 10 (Sensibilidad de -130dBm, excelente para 1-3km) 
+  // CR: 6 (4/6, suficiente corrección)
+  // Pwr: 22 (Máxima potencia)
+
+  int state = radio.begin(868.0, 62.5, 10, 6, 0x12, 22);
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println("[LoRa] Hardware OK -> Radio lista.");
   } else {
