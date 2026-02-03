@@ -36,11 +36,12 @@ struct __attribute__((packed)) TelemetryPacket {
 // --- OBJETOS ---
 SPIClass loraSPI(HSPI);
 SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY, loraSPI);
-MCP_CAN CAN0(CAN_CS);
+MCP_CAN CAN0(CAN_CS);  // ← COMENTADO
 
 // --- VARIABLES DE CONTROL ---
 volatile bool txReady = true; // Semáforo para saber si la radio está libre
 uint32_t globalCounter = 0;
+uint32_t paquetesDroppeados = 0;
 
 // Interrupción: Se dispara cuando la radio termina de enviar
 #if defined(ESP8266) || defined(ESP32)
@@ -54,11 +55,15 @@ void setup() {
   // VELOCIDAD ALTA PARA DEBUG
   Serial.begin(921600);
   delay(1000);
+  
+  Serial.println("\n╔════════════════════════════════════╗");
+  Serial.println("║   MADFT06 TRANSMISOR - MODO CAN    ║");
+  Serial.println("║   Leyendo datos del bus CAN...     ║");
+  Serial.println("╚════════════════════════════════════╝\n");
 
   // 1. INICIALIZAR CAN
   SPI.begin(CAN_SCK, CAN_MISO, CAN_MOSI, CAN_CS);
-  // ¡IMPORTANTE! Si tu cristal es de 16MHz, cambia MCP_8MHZ por MCP_16MHZ abajo:
-  if(CAN0.begin(MCP_ANY, CAN_500KBPS, MCP_8MHZ) == CAN_OK) {
+  if(CAN0.begin(MCP_ANY, CAN_1000KBPS, MCP_8MHZ) == CAN_OK) {
     CAN0.setMode(MCP_NORMAL);
     Serial.println("[CAN] Hardware OK.");
   } else {
@@ -69,15 +74,15 @@ void setup() {
   // 2. INICIALIZAR LORA (MODO VELOCIDAD)
   loraSPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_NSS);
   
-  // Parametros: Freq 868.0, BW 500.0, SF 7, CR 5 (4/5), SyncWord 0x12, Pwr 22dBm
-  // BW 500 + SF 7 = La configuración más rápida posible en LoRa
-  int state = radio.begin(868.0, 500.0, 7, 5, 0x12, 22);
-  
+  // Parametros: Freq 869.5, BW 125.0, SF 7, CR 5 (4/5), SyncWord 0x12, Pwr 22dBm
+  // BW 125 + SF 7 = La configuración más rápida posible en LoRa
+  int state = radio.begin(869.5, 125.0, 7, 7, 0x12, 22);  
   // Asignamos la función de interrupción
   radio.setDio1Action(setFlag);
 
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println("[LoRa] Hardware OK (Modo F1).");
+    Serial.println("[CAN] Esperando mensajes CAN...\n");
   } else {
     Serial.print("[LoRa] Fallo código: ");
     Serial.println(state);
@@ -109,7 +114,10 @@ void loop() {
       
       // Feedback mínimo (un punto)
       Serial.print("."); 
+    } else {
+      // Si txReady es false, ignoramos el paquete (DROP)
+      paquetesDroppeados++;
+      Serial.print("x");
     }
-    // Si txReady es false, ignoramos el paquete para no crear cola (LAG CERO)
   }
 }
