@@ -18,6 +18,15 @@
 #define LORA_MISO   11
 #define LORA_MOSI   10
 
+// valores lora
+#define LORA_BAND    869.5   // MHz
+#define LORA_SF      7
+#define LORA_BW      125.0   // kHz 
+#define LORA_CR      7       // 4/7
+#define LORA_PREAMBLE 8      // símbolos
+#define LORA_POWER   22      // dBm
+
+
 // Pines OLED 
 #define OLED_SDA    17
 #define OLED_SCL    18
@@ -160,7 +169,7 @@ void setup() {
   display.setFont(ArialMT_Plain_10);
   display.drawString(0, 22, "Iniciando sistema...");
   display.drawString(0, 35, "Freq: 869.5 MHz");
-  display.drawString(0, 47, "BW: 250 kHz | SF: 9");  // ← Cambiar esta línea
+  display.drawString(0, 47, "BW: 125 kHz | SF: 9");  // ← Cambiar esta línea
   display.display();
   delay(2000);
 
@@ -172,7 +181,7 @@ void setup() {
   loraSPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_NSS);
   
   // MISMA CONFIG QUE TX: BW 500.0, SF 7
-  int state = radio.begin(869.5, 250.0, 9, 7, 0x12, 22);  
+  int state = radio.begin(LORA_BAND, LORA_BW, LORA_SF, LORA_CR, 0x12, LORA_POWER);  
   radio.setDio1Action(setFlag);
 
   if (state == RADIOLIB_ERR_NONE) {
