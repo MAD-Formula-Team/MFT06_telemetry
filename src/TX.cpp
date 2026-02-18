@@ -147,8 +147,8 @@ void loop() {
     
     uint16_t canId = (uint16_t)rxId;
     
-    // --- FILTRO: Ignorar IDs ya vistas en los últimos 2 segundos ---
-    if(idYaVista(canId)) {
+    // --- FILTRO: Ignorar algo de engine ---
+    if(canId == 0x3A4) {
       Serial.print("-"); // ID duplicada, ignorada
       return; // Salir sin enviar
     }
