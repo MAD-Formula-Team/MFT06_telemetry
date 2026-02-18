@@ -50,7 +50,7 @@ unsigned long tiempoSegundo = 0;
 
 // --- ESTRUCTURA DE DATOS (DEBE SER IDÉNTICA AL TX) ---
 struct __attribute__((packed)) TelemetryPacket {
-  uint32_t packetId;
+  //uint32_t packetId;
   uint16_t canId;
   uint8_t  len;
   uint8_t  data[8];

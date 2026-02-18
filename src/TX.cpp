@@ -73,7 +73,7 @@ bool idYaVista(uint16_t canId) {
 // --- ESTRUCTURA DE DATOS (BINARIA COMPACTA) ---
 // Total: 15 Bytes (vs ~40 Bytes en texto)
 struct __attribute__((packed)) TelemetryPacket {
-  uint32_t packetId; // 4 bytes
+  //uint32_t packetId; // 4 bytes
   uint16_t canId;    // 2 bytes
   uint8_t  len;      // 1 byte
   uint8_t  data[8];  // 8 bytes
@@ -88,6 +88,9 @@ MCP_CAN CAN0(CAN_CS);  // ← COMENTADO
 volatile bool txReady = true; // Semáforo para saber si la radio está libre
 uint32_t globalCounter = 0;
 uint32_t paquetesDroppeados = 0;
+
+uint8_t contador3A4 = 0; // Contador para la ID 0x3A4 (ejemplo de filtro)
+
 
 // Interrupción: Se dispara cuando la radio termina de enviar
 #if defined(ESP8266) || defined(ESP32)
@@ -148,9 +151,17 @@ void loop() {
     uint16_t canId = (uint16_t)rxId;
     
     // --- FILTRO: Ignorar algo de engine ---
-    if(canId == 0x3A4) {
-      Serial.print("-"); // ID duplicada, ignorada
-      return; // Salir sin enviar
+    
+    // if((canId == 0x3A4) && ( contador3A4 >= 20)) {
+    //   contador3A4 = 0; // Reiniciar contador    
+    // } else if (canId == 0x3A4) { 
+    //   contador3A4++; 
+    //   return; }
+
+    if (canId != 0x3A3) {
+      
+        return; // Ignorar este mensaje
+      
     }
 
     // 2. ENVIAR SOLO SI LA RADIO ESTÁ LIBRE (Estrategia "Drop")
@@ -158,7 +169,7 @@ void loop() {
       txReady = false; // Marcamos ocupado
       
       // Llenamos la estructura binaria
-      packet.packetId = globalCounter++;
+      //packet.packetId = globalCounter++;
       packet.canId = canId;
       packet.len = len;
       memcpy(packet.data, rxBuf, 8); // Copia rápida de memoria
