@@ -175,7 +175,6 @@ void setup() {
 
   // VELOCIDAD ALTA (Ajusta tu monitor serie a esto)
   Serial.begin(921600);
-  delay(1000);
   Serial.println("--- BASE STATION LISTA ---");
 
   loraSPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_NSS);
@@ -233,21 +232,26 @@ void loop() {
       paquetesRecibidos++;
       contadorTemporal++;
       
-      // --- CONVERSIÓN A CSV (Para que RoboWin.py lo entienda) ---
-      // Formato: packetID, CAN_ID, Byte0, Byte1, ...
-      
-      Serial.print(packet.packetId);
-      Serial.print(",");
+      Serial.print("t"); // Inicio de trama estándar
+
+      // ID (Debe ser siempre 3 caracteres hexadecimales)
+      // Ejemplo: ID 0x1A -> "01A"
+      if (packet.canId < 0x100) Serial.print("0");
+      if (packet.canId < 0x10)  Serial.print("0");
       Serial.print(packet.canId, HEX);
-      
+
+      // Longitud (1 caracter)
+      Serial.print(packet.len);
+
+      // Datos (2 caracteres hex por cada byte)
+      // Ejemplo: dato 10 -> "0A"
       for(int i=0; i<packet.len; i++) {
-        Serial.print(",");
-        // Formateo bonito (0A en vez de A)
         if(packet.data[i] < 0x10) Serial.print("0");
         Serial.print(packet.data[i], HEX);
       }
-      // Salto de línea para terminar el paquete
-      Serial.println(); 
+
+      // Terminador (Retorno de carro, vital para python-can)
+      Serial.write('\r'); 
       
     } else {
       // Error de CRC (paquete corrupto)
