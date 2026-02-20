@@ -21,13 +21,13 @@
 // valores lora
 #define LORA_BAND    869.5   // MHz
 #define LORA_SF      7
-#define LORA_BW      125.0   // kHz 
+#define LORA_BW      125.0   // kHz
 #define LORA_CR      7       // 4/7
 #define LORA_PREAMBLE 8      // símbolos
 #define LORA_POWER   22      // dBm
 
 
-// Pines OLED 
+// Pines OLED
 #define OLED_SDA    17
 #define OLED_SCL    18
 #define OLED_RST    21
@@ -76,22 +76,22 @@ void iniciarOLED() {
     pinMode(Vext, OUTPUT);
     digitalWrite(Vext, LOW);  // LOW = encendido
     delay(100);
-    
+
     // 2. Reset de la pantalla
     pinMode(OLED_RST, OUTPUT);
     digitalWrite(OLED_RST, LOW);
     delay(20);
     digitalWrite(OLED_RST, HIGH);
-    
+
     // 3. Inicializar display
     display.init();
-    
+
     // 4. Voltear pantalla (para que se vea bien)
     display.flipScreenVertically();
-    
+
     // 5. Configurar fuente por defecto
     display.setFont(ArialMT_Plain_10);
-    
+
     // 6. Limpiar pantalla
     display.clear();
     display.display();
@@ -99,29 +99,29 @@ void iniciarOLED() {
 
 void actualizarOLED() {
   display.clear();
-  
+
   // --- LÍNEA 1: Contador de paquetes (0-10px) ---
   display.setFont(ArialMT_Plain_10);
   display.drawString(0, 0, "RX:" + String(paquetesRecibidos));
   display.drawString(55, 0, "ERR:" + String(paquetesCorruptos));
-  
+
   // PPS en la esquina derecha
   display.setTextAlignment(TEXT_ALIGN_RIGHT);
   display.drawString(128, 0, String(paquetesPorSegundo) + "/s");
   display.setTextAlignment(TEXT_ALIGN_LEFT);
-  
+
   // --- LÍNEA 2: RSSI (12-26px) ---
   display.setFont(ArialMT_Plain_16);
   display.drawString(0, 12, String((int)rssi) + " dBm");
-  
+
   // SNR a la derecha de RSSI
   display.setFont(ArialMT_Plain_10);
   display.drawString(75, 16, "SNR:" + String(snr, 1));
-  
+
   // --- LÍNEA 3: Barra visual de RSSI (28-38px) ---
   int barraRSSI = map(constrain(rssi, -120, -30), -120, -30, 0, 100);
   display.drawProgressBar(0, 28, 120, 8, barraRSSI);
-  
+
   // --- LÍNEA 4: Estado de calidad CENTRADO (40-63px) ---
   String calidad;
   if(rssi > -70) {
@@ -135,20 +135,20 @@ void actualizarOLED() {
   } else {
     calidad = "MUY DEBIL";
   }
-  
+
   // Calidad también depende del SNR
   if(snr < 0 && rssi > -100) {
     calidad = "RUIDOSA";
   }
-  
+
   // Estado centrado y grande
   display.setFont(ArialMT_Plain_16);
   display.setTextAlignment(TEXT_ALIGN_CENTER);
   display.drawString(64, 48, calidad);  // Centrado en y=48 para que quepa
   display.setTextAlignment(TEXT_ALIGN_LEFT);
-  
+
   display.display();
-  
+
   // --- CALCULAR PPS (Paquetes Por Segundo) ---
   if(millis() - tiempoSegundo >= 1000) {
     paquetesPorSegundo = contadorTemporal;
@@ -159,7 +159,7 @@ void actualizarOLED() {
 
 void setup() {
   iniciarOLED();
-  
+
   // Pantalla de inicio
   display.clear();
   display.setFont(ArialMT_Plain_16);
@@ -178,14 +178,14 @@ void setup() {
   Serial.println("--- BASE STATION LISTA ---");
 
   loraSPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_NSS);
-  
+
   // MISMA CONFIG QUE TX: BW 500.0, SF 7
-  int state = radio.begin(LORA_BAND, LORA_BW, LORA_SF, LORA_CR, 0x12, LORA_POWER);  
+  int state = radio.begin(LORA_BAND, LORA_BW, LORA_SF, LORA_CR, 0x12, LORA_POWER);
   radio.setDio1Action(setFlag);
 
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println("[LoRa] Receptor listo");
-    
+
     // Pantalla de confirmación
     display.clear();
     display.setFont(ArialMT_Plain_16);
@@ -196,24 +196,24 @@ void setup() {
     display.drawString(0, 50, "Esperando datos...");
     display.display();
     delay(1000);
-    
+
     // Empezamos a escuchar
     radio.startReceive();
-    
+
     // Inicializar timer para PPS
     tiempoSegundo = millis();
-    
+
   } else {
     Serial.print("Fallo Radio: ");
     Serial.println(state);
-    
+
     display.clear();
     display.setFont(ArialMT_Plain_16);
     display.drawString(0, 20, "ERROR RADIO");
     display.setFont(ArialMT_Plain_10);
     display.drawString(0, 40, "Codigo: " + String(state));
     display.display();
-    
+
     while(1);
   }
 }
@@ -231,7 +231,7 @@ void loop() {
       snr = radio.getSNR();
       paquetesRecibidos++;
       contadorTemporal++;
-      
+
       Serial.print("t"); // Inicio de trama estándar
 
       // ID (Debe ser siempre 3 caracteres hexadecimales)
@@ -251,8 +251,8 @@ void loop() {
       }
 
       // Terminador (Retorno de carro, vital para python-can)
-      Serial.write('\r'); 
-      
+      Serial.write('\r');
+
     } else {
       // Error de CRC (paquete corrupto)
       paquetesCorruptos++;
@@ -261,7 +261,7 @@ void loop() {
     // Volvemos a escuchar inmediatamente
     radio.startReceive();
   }
-  
+
   // --- ACTUALIZAR PANTALLA CADA 250ms ---
   if(millis() - ultimaActualizacion > 250) {
     ultimaActualizacion = millis();
