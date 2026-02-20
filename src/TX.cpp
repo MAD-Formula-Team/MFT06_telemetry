@@ -20,7 +20,7 @@
 
 #define LORA_BAND    869.5   // MHz
 #define LORA_SF      7
-#define LORA_BW      125.0   // kHz 
+#define LORA_BW      125.0   // kHz
 #define LORA_CR      7       // 4/7
 #define LORA_PREAMBLE 8      // símbolos
 #define LORA_POWER   22      // dBm
@@ -39,7 +39,7 @@ const unsigned long VENTANA_TIEMPO = 2000;  // 2 segundos en ms
 // --- FUNCIÓN AUXILIAR (añadir antes del loop) ---
 bool idYaVista(uint16_t canId) {
   unsigned long ahora = millis();
-  
+
   // Buscar si la ID ya existe
   for(uint8_t i = 0; i < numIdsTrackeadas; i++) {
     // Limpiar IDs antiguas (más de 2 segundos)
@@ -53,20 +53,20 @@ bool idYaVista(uint16_t canId) {
       i--; // Revisar la misma posición de nuevo
       continue;
     }
-    
+
     // Si encontramos la ID y es reciente
     if(idsRecientes[i] == canId) {
       return true; // Ya vista recientemente
     }
   }
-  
+
   // No está en la lista, agregarla
   if(numIdsTrackeadas < MAX_IDS) {
     idsRecientes[numIdsTrackeadas] = canId;
     tiemposIds[numIdsTrackeadas] = ahora;
     numIdsTrackeadas++;
   }
-  
+
   return false; // No vista, es nueva
 }
 
@@ -104,7 +104,7 @@ void setup() {
   // VELOCIDAD ALTA PARA DEBUG
   Serial.begin(921600);
   delay(1000);
-  
+
   Serial.println("\n╔════════════════════════════════════╗");
   Serial.println("║   MADFT06 TRANSMISOR - MODO CAN    ║");
   Serial.println("║   Leyendo datos del bus CAN...     ║");
@@ -122,10 +122,10 @@ void setup() {
 
   // 2. INICIALIZAR LORA (MODO VELOCIDAD)
   loraSPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_NSS);
-  
+
   // Parametros: Freq 869.5, BW 125.0, SF 7, CR 5 (4/5), SyncWord 0x12, Pwr 22dBm
   // BW 125 + SF 7 = La configuración más rápida posible en LoRa
-  int state = radio.begin(LORA_BAND, LORA_BW, LORA_SF, LORA_CR, 0x12, LORA_POWER);  
+  int state = radio.begin(LORA_BAND, LORA_BW, LORA_SF, LORA_CR, 0x12, LORA_POWER);
   // Asignamos la función de interrupción
   radio.setDio1Action(setFlag);
 
@@ -145,29 +145,29 @@ void loop() {
     long unsigned int rxId;
     unsigned char len;
     unsigned char rxBuf[8];
-    
+
     CAN0.readMsgBuf(&rxId, &len, rxBuf);
-    
+
     uint16_t canId = (uint16_t)rxId;
-    
+
     // --- FILTRO: Ignorar algo de engine ---
-    
+
     // if((canId == 0x3A4) && ( contador3A4 >= 20)) {
-    //   contador3A4 = 0; // Reiniciar contador    
-    // } else if (canId == 0x3A4) { 
-    //   contador3A4++; 
+    //   contador3A4 = 0; // Reiniciar contador
+    // } else if (canId == 0x3A4) {
+    //   contador3A4++;
     //   return; }
 
     if (canId != 0x3A3) {
-      
+
         return; // Ignorar este mensaje
-      
+
     }
 
     // 2. ENVIAR SOLO SI LA RADIO ESTÁ LIBRE (Estrategia "Drop")
     if(txReady) {
       txReady = false; // Marcamos ocupado
-      
+
       // Llenamos la estructura binaria
       //packet.packetId = globalCounter++;
       packet.canId = canId;
@@ -176,16 +176,16 @@ void loop() {
 
       // Enviamos (Non-blocking)
       radio.startTransmit((uint8_t*)&packet, sizeof(packet));
-      
+
       // Feedback mínimo (un punto)
-      Serial.print("."); 
+      Serial.print(".");
     } else {
       // Si txReady es false, ignoramos el paquete (DROP)
       paquetesDroppeados++;
       Serial.print("x");
     }
   }
-  
+
   // --- DEBUG ESTADÍSTICAS CADA 5 SEGUNDOS ---
   static unsigned long lastDebug = 0;
   if(millis() - lastDebug > 5000) {
@@ -195,15 +195,15 @@ void loop() {
     Serial.print("║ Paquetes enviados:    ");
     Serial.print(globalCounter);
     Serial.println("              ║");
-    
+
     Serial.print("║ Paquetes dropped:     ");
     Serial.print(paquetesDroppeados);
     Serial.println("              ║");
-    
+
     Serial.print("║ IDs únicas trackeadas: ");
     Serial.print(numIdsTrackeadas);
     Serial.println("             ║");
-    
+
     // Calcular porcentaje de pérdida
     uint32_t total = globalCounter + paquetesDroppeados;
     if(total > 0) {
@@ -212,7 +212,7 @@ void loop() {
       Serial.print(perdida, 2);
       Serial.println(" %            ║");
     }
-    
+
     Serial.println("╟────────────────────────────────────────╢");
     Serial.println("║ IDs activas (últimos 2s):              ║");
     for(uint8_t i = 0; i < numIdsTrackeadas && i < 10; i++) {
@@ -229,7 +229,7 @@ void loop() {
       Serial.print(numIdsTrackeadas - 10);
       Serial.println(" más                        ║");
     }
-    
+
     Serial.println("╚════════════════════════════════════════╝\n");
   }
 }
