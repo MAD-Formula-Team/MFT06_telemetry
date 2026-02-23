@@ -1,15 +1,9 @@
-/**
- * TELEMETRÍA MADFT06 - TRANSMISOR (COCHE) - VERSION F1 (Low Latency)
- * Hardware: Heltec V3 + MCP2515
- * Protocolo: Binario Raw + Drop Strategy
- */
 #include <Arduino.h>
 #include <SPI.h>
 #include <mcp_can.h>
 #include <RadioLib.h>
 
-// --- CONFIGURACIÓN DE PINES ---
-// LoRa (Heltec V3 Interno)
+// --- PINES (igual que antes) ---
 #define LORA_NSS    8
 #define LORA_DIO1   14
 #define LORA_RST    12
@@ -30,13 +24,88 @@
 #define CAN_MISO    33
 #define CAN_MOSI    35
 
-const uint16_t MAX_IDS = 50;  // Máximo de IDs diferentes a trackear
+int contador3A4 = 0;
+
+// --- ESTRUCTURA DE PAQUETE ---
+struct __attribute__((packed)) TelemetryPacket {
+  uint32_t packetId;
+  uint16_t canId;
+  uint8_t  len;
+  uint8_t  data[8];
+};
+
+// --- COLA ENTRE NÚCLEOS ---
+// Capacidad: 32 paquetes en buffer, si se llena se dropea (no bloquea el CAN)
+QueueHandle_t colaLoRa;
+#define COLA_SIZE 32
+
+// --- OBJETOS RADIO Y CAN ---
+SPIClass loraSPI(HSPI);
+SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY, loraSPI);
+MCP_CAN CAN0(CAN_CS);
+
+// --- CONTROL DE IDs (corregido con int8_t) ---
+const uint16_t MAX_IDS = 50;
 uint16_t idsRecientes[MAX_IDS];
 unsigned long tiemposIds[MAX_IDS];
-uint8_t numIdsTrackeadas = 0;
-const unsigned long VENTANA_TIEMPO = 2000;  // 2 segundos en ms
+int8_t numIdsTrackeadas = 0;  // ← SIGNED para evitar underflow
+const unsigned long VENTANA_TIEMPO = 2000;
 
-// --- FUNCIÓN AUXILIAR (añadir antes del loop) ---
+// --- STATS ---
+uint32_t globalCounter = 0;
+uint32_t paquetesDroppeados = 0;
+
+// --- ISR LoRa ---
+volatile bool txReady = true;
+ICACHE_RAM_ATTR void setFlag(void) {
+  txReady = true;
+}
+
+// ================================================================
+// TASK CORE 0: Empaquetar y enviar por LoRa
+// ================================================================
+void taskLoRa(void *pvParameters) {
+  TelemetryPacket packet;
+  
+  // Inicializar LoRa en este task (mismo core que lo va a usar)
+  loraSPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_NSS);
+  int state = radio.begin(LORA_BAND, LORA_BW, LORA_SF, LORA_CR, 0x12, LORA_POWER);
+  radio.setDio1Action(setFlag);
+  
+  if(state != RADIOLIB_ERR_NONE) {
+    Serial.printf("[LoRa] Error init: %d\n", state);
+    vTaskDelete(NULL);
+    return;
+  }
+  Serial.println("[LoRa] Task OK en Core 0");
+
+  for(;;) {
+    // Espera bloqueante: duerme hasta que llegue algo a la cola
+    // Timeout 100ms para no quedarse colgado para siempre
+    if(xQueueReceive(colaLoRa, &packet, pdMS_TO_TICKS(100)) == pdTRUE) {
+      
+      // Esperar a que la radio esté libre (con timeout de seguridad)
+      uint32_t timeout = millis();
+      while(!txReady && (millis() - timeout < 500)) {
+        vTaskDelay(1); // Ceder CPU mientras espera, no busy-wait
+      }
+      
+      if(txReady) {
+        txReady = false;
+        radio.startTransmit((uint8_t*)&packet, sizeof(packet));
+      } else {
+        // Timeout de radio → algo fue mal, reintentar en siguiente paquete
+        paquetesDroppeados++;
+        txReady = true; // Reset forzado
+      }
+    }
+  }
+}
+
+// ================================================================
+// TASK CORE 1: Leer CAN (o simplemente el loop() de Arduino)
+// ================================================================
+
 bool idYaVista(uint16_t canId) {
   unsigned long ahora = millis();
 
@@ -44,13 +113,12 @@ bool idYaVista(uint16_t canId) {
   for(uint8_t i = 0; i < numIdsTrackeadas; i++) {
     // Limpiar IDs antiguas (más de 2 segundos)
     if(ahora - tiemposIds[i] > VENTANA_TIEMPO) {
-      // Eliminar esta entrada moviendo el resto
-      for(uint8_t j = i; j < numIdsTrackeadas - 1; j++) {
+      for(int8_t j = i; j < numIdsTrackeadas - 1; j++) {
         idsRecientes[j] = idsRecientes[j + 1];
         tiemposIds[j] = tiemposIds[j + 1];
       }
-      numIdsTrackeadas--;
-      i--; // Revisar la misma posición de nuevo
+      if(numIdsTrackeadas > 0) numIdsTrackeadas--; // guarda extra
+      i--;
       continue;
     }
 
@@ -101,7 +169,6 @@ void setFlag(void) {
 }
 
 void setup() {
-  // VELOCIDAD ALTA PARA DEBUG
   Serial.begin(921600);
   delay(1000);
 
@@ -114,9 +181,9 @@ void setup() {
   SPI.begin(CAN_SCK, CAN_MISO, CAN_MOSI, CAN_CS);
   if(CAN0.begin(MCP_ANY, CAN_1000KBPS, MCP_8MHZ) == CAN_OK) {
     CAN0.setMode(MCP_NORMAL);
-    Serial.println("[CAN] Hardware OK.");
+    Serial.println("[CAN] OK");
   } else {
-    Serial.println("[CAN] FALLO DE HARDWARE.");
+    Serial.println("[CAN] FALLO");
     while(1);
   }
 
@@ -140,7 +207,7 @@ void setup() {
 }
 
 void loop() {
-  // 1. LEER CAN (SIEMPRE, para vaciar buffer)
+  // Core 1: solo leer CAN y meter en cola, rapidísimo
   if(CAN0.checkReceive() == CAN_MSGAVAIL) {
     long unsigned int rxId;
     unsigned char len;
@@ -182,7 +249,6 @@ void loop() {
     } else {
       // Si txReady es false, ignoramos el paquete (DROP)
       paquetesDroppeados++;
-      Serial.print("x");
     }
   }
 
