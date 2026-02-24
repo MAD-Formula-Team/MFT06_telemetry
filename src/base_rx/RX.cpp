@@ -1,71 +1,30 @@
-/**
- * TELEMETRÍA MADFT06 - RECEPTOR (BASE) - VERSION F2 (Dual-Core)
- * Hardware: Heltec V3
- * Función: Recibe Binario -> Convierte a CSV para PC + Monitoreo OLED
- * 
- * Core 1: Recepción LoRa + Serial (loop principal)
- * Core 0: Refresco OLED cada 250ms
- */
 #include <Arduino.h>
 #include <SPI.h>
 #include <RadioLib.h>
 #include <Wire.h>
 #include <SSD1306Wire.h>
-
-// --- PINES LORA ---
-#define LORA_NSS    8
-#define LORA_DIO1   14
-#define LORA_RST    12
-#define LORA_BUSY   13
-#define LORA_SCK    9
-#define LORA_MISO   11
-#define LORA_MOSI   10
-
-// --- VALORES LORA ---
-#define LORA_BAND     869.5   // MHz
-#define LORA_SF       7
-#define LORA_BW       125.0   // kHz
-#define LORA_CR       7       // 4/7
-#define LORA_PREAMBLE 8       // símbolos
-#define LORA_POWER    22      // dBm
-
-// --- PINES OLED ---
-#define OLED_SDA    17
-#define OLED_SCL    18
-#define OLED_RST    21
-#define Vext        36
+#include "common_config.h"
 
 // --- OBJETO DISPLAY ---
 SSD1306Wire display(0x3c, OLED_SDA, OLED_SCL);
 
 // --- MÉTRICAS DE SEÑAL ---
-// Usamos volatile para las variables compartidas entre cores
 volatile uint32_t paquetesRecibidos  = 0;
 volatile uint32_t paquetesCorruptos  = 0;
 volatile float    rssi               = 0;
 volatile float    snr                = 0;
-
-// Tasa de paquetes por segundo
 volatile uint32_t paquetesPorSegundo = 0;
 volatile uint32_t contadorTemporal   = 0;
 volatile unsigned long tiempoSegundo = 0;
 
-// --- MUTEX para proteger acceso al display desde Core 0 ---
 SemaphoreHandle_t mutexDisplay;
 
-// --- ESTRUCTURA DE DATOS (DEBE SER IDÉNTICA AL TX) ---
-struct __attribute__((packed)) TelemetryPacket {
-  uint32_t packetId;
-  uint16_t canId;
-  uint8_t  len;
-  uint8_t  data[8];
-} packet;
+// TODO QUITAR LOS CAMPOS QUE NO SE USAN PARA AHORRAR ANCHO DE BANDA (ej. packetId)
+TelemetryPacket packet;
 
-// --- OBJETOS RADIO ---
 SPIClass loraSPI(HSPI);
 SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY, loraSPI);
 
-// --- BANDERA DE INTERRUPCIÓN ---
 volatile bool rxReceived = false;
 
 ICACHE_RAM_ATTR void setFlag(void) {
@@ -77,8 +36,8 @@ ICACHE_RAM_ATTR void setFlag(void) {
 // ================================================================
 
 void iniciarOLED() {
-  pinMode(Vext, OUTPUT);
-  digitalWrite(Vext, LOW);  // LOW = encendido en Heltec V3
+  pinMode(OLED_VEXT, OUTPUT);
+  digitalWrite(OLED_VEXT, LOW);  
   delay(100);
 
   pinMode(OLED_RST, OUTPUT);
@@ -94,7 +53,6 @@ void iniciarOLED() {
 }
 
 void actualizarOLED() {
-  // Calcular PPS aquí (se llama cada 250ms desde Core 0)
   if(millis() - tiempoSegundo >= 1000) {
     paquetesPorSegundo = contadorTemporal;
     contadorTemporal   = 0;
@@ -150,19 +108,16 @@ void actualizarOLED() {
 }
 
 // ================================================================
-// TASK CORE 0: Refresco de pantalla OLED
-// Completamente independiente de la recepción LoRa
+// OLED
 // ================================================================
 void taskOLED(void *pvParameters) {
   for(;;) {
-    // Tomar mutex antes de dibujar (evita corrupción I2C si en algún
-    // momento el Core 1 también accediera al display)
     if(xSemaphoreTake(mutexDisplay, pdMS_TO_TICKS(50)) == pdTRUE) {
       actualizarOLED();
       xSemaphoreGive(mutexDisplay);
     }
 
-    // Dormir 250ms sin bloquear nada
+    // Dormir 250ms
     vTaskDelay(pdMS_TO_TICKS(250));
   }
 }
@@ -233,8 +188,7 @@ void setup() {
     while(1);
   }
 
-  // Lanzar task OLED en Core 0
-  // Prioridad 1 (igual que loop), stack 3KB suficiente para el display
+  // Lanzar task OLED 
   xTaskCreatePinnedToCore(
     taskOLED,     // Función
     "TaskOLED",   // Nombre debug
@@ -249,7 +203,7 @@ void setup() {
 }
 
 // ================================================================
-// LOOP - CORE 1: 100% dedicado a recepción LoRa + Serial
+// LOOP - LoRa
 // ================================================================
 void loop() {
   if(rxReceived) {
@@ -258,15 +212,12 @@ void loop() {
     int state = radio.readData((uint8_t*)&packet, sizeof(packet));
 
     if(state == RADIOLIB_ERR_NONE) {
-      // Actualizar métricas (volatile, acceso atómico en ESP32 para 32bit)
       rssi = radio.getRSSI();
       snr  = radio.getSNR();
       paquetesRecibidos++;
       contadorTemporal++;
 
-      // Volcar CSV por Serial
-      //Serial.print(packet.packetId);
-      //Serial.print(",");
+      // No quitar, esto se usa para que la UI lea los datos
       Serial.print(packet.canId, HEX);
 
       for(int i = 0; i < packet.len; i++) {
@@ -275,12 +226,13 @@ void loop() {
         Serial.print(packet.data[i], HEX);
       }
       Serial.println();
+      
+      // Todo este bloque no se puede quitar
 
     } else {
       paquetesCorruptos++;
     }
 
-    // Volver a escuchar inmediatamente
     radio.startReceive();
   }
 }
