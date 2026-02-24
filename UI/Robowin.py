@@ -1,7 +1,8 @@
 import sys
 import time
-import can
+import os
 import cantools
+import serial
 import serial.tools.list_ports
 import pyqtgraph as pg
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
@@ -12,8 +13,10 @@ from PyQt6.QtGui import QFont, QColor
 
 # --- CONFIGURACIÓN ---
 CAN_BITRATE = 1000000
-DBC_FILE = "mft04.dbc"
-CAN_INTERFACE_TYPE = 'slcan' 
+# Ruta del DBC relativa al script
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DBC_FILE = os.path.join(SCRIPT_DIR, "mft04.dbc")
+CAN_INTERFACE_TYPE = 'robotell' 
 REFRESH_RATE_MS = 50 
 
 # Paleta de colores para las gráficas (se reciclan si eliges muchas señales)
@@ -44,10 +47,16 @@ class CanWorker(QThread):
         self.last_receive_times = {}
 
         try:
+            print(f"[DBC] Intentando cargar: {DBC_FILE}")
             self.db = cantools.database.load_file(DBC_FILE)
-            print(f"DBC cargado: {DBC_FILE}")
+            print(f"[DBC] Cargado correctamente: {len(self.db.messages)} mensajes")
+            # Mostrar algunos IDs disponibles
+            available_ids = [f"0x{msg.frame_id:X}" for msg in self.db.messages[:10]]
+            print(f"[DBC] Primeros IDs disponibles: {', '.join(available_ids)}")
         except Exception as e:
-            print(f"Error crítico cargando DBC: {e}")
+            print(f"[DBC] ERROR crítico cargando DBC: {e}")
+            import traceback
+            traceback.print_exc()
 
     def get_available_ports(self):
         ports = serial.tools.list_ports.comports()
@@ -87,71 +96,75 @@ class CanWorker(QThread):
 
             else:
                 try:
-                    # LÓGICA ROBOWIN: Leer línea a línea
+                    # LÓGICA CSV: Leer línea a línea
                     if self.serial.in_waiting:
-                        # Leemos hasta el caracter de fin de línea '\r' (slcan standard)
-                        # decode() convierte bytes a string
-                        raw_line = self.serial.read_until(b'\r').decode('utf-8', errors='ignore').strip()
+                        # Leemos hasta el salto de línea '\n' (formato CSV)
+                        raw_line = self.serial.readline().decode('utf-8', errors='ignore').strip()
                         
                         if not raw_line:
                             continue
 
-                        # --- PARSEO MANUAL SLCAN (tIIILDD...) ---
-                        # Ejemplo: t3A58FFFFFFFFFFFFFFFF
-                        if raw_line.startswith('t') and len(raw_line) >= 4:
-                            try:
-                                # Extraer datos del string
-                                can_id_str = raw_line[1:4]      # 3 chars para ID
-                                dlc_str = raw_line[4]           # 1 char para Length
-                                data_str = raw_line[5:]         # Resto son datos
+                        # --- PARSEO CSV (3B1,00,00,00,00,00,00,00,00) ---
+                        try:
+                            parts = raw_line.split(',')
+                            
+                            if len(parts) < 1:
+                                continue
+                            
+                            # Primer elemento: CAN ID en hex
+                            can_id = int(parts[0], 16)
+                            
+                            # Resto: datos en hex
+                            data_bytes = bytes([int(b, 16) for b in parts[1:]])
+                            dlc = len(data_bytes)
 
-                                can_id = int(can_id_str, 16)
-                                dlc = int(dlc_str)
-                                
-                                # Convertir hex string a bytes
-                                data_bytes = bytes.fromhex(data_str)
+                            # --- A PARTIR DE AQUÍ, ES IGUAL QUE ANTES ---
+                            current_time = time.time()
+                            timestamp = time.strftime('%H:%M:%S')
+                            
+                            # Generar Traza
+                            hex_data_view = ' '.join([f"{b:02X}" for b in data_bytes])
+                            msg_name = "Unknown"
+                            decoded_str = ""
+                            decoded_signals = {}
 
-                                # --- A PARTIR DE AQUÍ, ES IGUAL QUE ANTES ---
-                                current_time = time.time()
-                                timestamp = time.strftime('%H:%M:%S')
-                                
-                                # Generar Traza
-                                hex_data_view = ' '.join([f"{b:02X}" for b in data_bytes])
-                                msg_name = "Unknown"
-                                decoded_str = ""
-                                decoded_signals = {}
-
-                                if self.db:
+                            if self.db:
+                                try:
+                                    # Intentar obtener el mensaje por ID
                                     try:
-                                        try:
-                                            msg_def = self.db.get_message_by_frame_id(can_id)
-                                            msg_name = msg_def.name
-                                        except:
-                                            msg_name = f"ID_0x{can_id:X}"
+                                        msg_def = self.db.get_message_by_frame_id(can_id)
+                                        msg_name = msg_def.name
+                                        print(f"[DEBUG] ID 0x{can_id:X} -> Mensaje: {msg_name}")
+                                    except KeyError:
+                                        msg_name = f"ID_0x{can_id:X}"
+                                        print(f"[DEBUG] ID 0x{can_id:X} no encontrado en DBC")
 
-                                        decoded_signals = self.db.decode_message(can_id, data_bytes)
-                                        
-                                        # Actualizar GUI Data
-                                        self.data_lock.lock()
-                                        self.latest_data.update(decoded_signals)
-                                        for key in decoded_signals.keys():
-                                            self.last_receive_times[key] = current_time
-                                        self.data_lock.unlock()
-
-                                        # String para traza
-                                        parts = [f"{k}={v:.2f}" if isinstance(v, float) else f"{k}={v}" for k, v in decoded_signals.items()]
-                                        decoded_str = " | ".join(parts) if parts else "(Sin señales)"
+                                    # Intentar decodificar
+                                    decoded_signals = self.db.decode_message(can_id, data_bytes)
+                                    print(f"[DEBUG] Señales decodificadas: {decoded_signals}")
                                     
-                                    except:
-                                        decoded_str = "(Decode Error)"
+                                    # Actualizar GUI Data
+                                    self.data_lock.lock()
+                                    self.latest_data.update(decoded_signals)
+                                    for key in decoded_signals.keys():
+                                        self.last_receive_times[key] = current_time
+                                    self.data_lock.unlock()
 
-                                # Emitir traza
-                                trace_msg = f"[{timestamp}] {can_id:3X} ({msg_name:^15}) {decoded_str} | Raw: [{hex_data_view}]"
-                                self.new_trace.emit(trace_msg)
+                                    # String para traza
+                                    parts_str = [f"{k}={v:.2f}" if isinstance(v, float) else f"{k}={v}" for k, v in decoded_signals.items()]
+                                    decoded_str = " | ".join(parts_str) if parts_str else "(Sin señales)"
+                                
+                                except Exception as decode_err:
+                                    decoded_str = f"(Decode Error: {decode_err})"
+                                    print(f"[DEBUG] Error decodificando 0x{can_id:X}: {decode_err}")
 
-                            except ValueError:
-                                # Si llega basura durante el arranque, la ignoramos sin crashear
-                                pass
+                            # Emitir traza
+                            trace_msg = f"[{timestamp}] {can_id:3X} ({msg_name:^15}) {decoded_str} | Raw: [{hex_data_view}]"
+                            self.new_trace.emit(trace_msg)
+
+                        except (ValueError, IndexError):
+                            # Si llega basura o formato incorrecto, la ignoramos
+                            pass
                         
                     else:
                         # Si no hay datos, dormimos un poco para no quemar CPU

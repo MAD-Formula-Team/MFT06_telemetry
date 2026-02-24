@@ -21,16 +21,15 @@
 #define LORA_MISO   11
 #define LORA_MOSI   10
 
-// valores lora
-#define LORA_BAND    869.5   // MHz
-#define LORA_SF      7
-#define LORA_BW      125.0   // kHz
-#define LORA_CR      7       // 4/7
-#define LORA_PREAMBLE 8      // símbolos
-#define LORA_POWER   22      // dBm
+// --- VALORES LORA ---
+#define LORA_BAND     869.5   // MHz
+#define LORA_SF       7
+#define LORA_BW       125.0   // kHz
+#define LORA_CR       7       // 4/7
+#define LORA_PREAMBLE 8       // símbolos
+#define LORA_POWER    22      // dBm
 
-
-// Pines OLED
+// --- PINES OLED ---
 #define OLED_SDA    17
 #define OLED_SCL    18
 #define OLED_RST    21
@@ -78,29 +77,20 @@ ICACHE_RAM_ATTR void setFlag(void) {
 // ================================================================
 
 void iniciarOLED() {
-    // 1. Encender alimentación de la pantalla (IMPORTANTE en V3)
-    pinMode(Vext, OUTPUT);
-    digitalWrite(Vext, LOW);  // LOW = encendido
-    delay(100);
+  pinMode(Vext, OUTPUT);
+  digitalWrite(Vext, LOW);  // LOW = encendido en Heltec V3
+  delay(100);
 
-    // 2. Reset de la pantalla
-    pinMode(OLED_RST, OUTPUT);
-    digitalWrite(OLED_RST, LOW);
-    delay(20);
-    digitalWrite(OLED_RST, HIGH);
+  pinMode(OLED_RST, OUTPUT);
+  digitalWrite(OLED_RST, LOW);
+  delay(20);
+  digitalWrite(OLED_RST, HIGH);
 
-    // 3. Inicializar display
-    display.init();
-
-    // 4. Voltear pantalla (para que se vea bien)
-    display.flipScreenVertically();
-
-    // 5. Configurar fuente por defecto
-    display.setFont(ArialMT_Plain_10);
-
-    // 6. Limpiar pantalla
-    display.clear();
-    display.display();
+  display.init();
+  display.flipScreenVertically();
+  display.setFont(ArialMT_Plain_10);
+  display.clear();
+  display.display();
 }
 
 void actualizarOLED() {
@@ -120,60 +110,60 @@ void actualizarOLED() {
 
   display.clear();
 
-  // --- LÍNEA 1: Contador de paquetes (0-10px) ---
+  // --- LÍNEA 1: Contadores ---
   display.setFont(ArialMT_Plain_10);
-  display.drawString(0, 0, "RX:" + String(paquetesRecibidos));
-  display.drawString(55, 0, "ERR:" + String(paquetesCorruptos));
+  display.setTextAlignment(TEXT_ALIGN_LEFT);
+  display.drawString(0, 0, "RX:" + String(rx));
+  display.drawString(55, 0, "ERR:" + String(err));
 
-  // PPS en la esquina derecha
   display.setTextAlignment(TEXT_ALIGN_RIGHT);
   display.drawString(128, 0, String(pps) + "/s");
   display.setTextAlignment(TEXT_ALIGN_LEFT);
 
-  // --- LÍNEA 2: RSSI (12-26px) ---
+  // --- LÍNEA 2: RSSI grande ---
   display.setFont(ArialMT_Plain_16);
-  display.drawString(0, 12, String((int)rssi) + " dBm");
+  display.drawString(0, 12, String((int)r) + " dBm");
 
-  // SNR a la derecha de RSSI
   display.setFont(ArialMT_Plain_10);
-  display.drawString(75, 16, "SNR:" + String(snr, 1));
+  display.drawString(75, 16, "SNR:" + String(s, 1));
 
-  // --- LÍNEA 3: Barra visual de RSSI (28-38px) ---
-  int barraRSSI = map(constrain(rssi, -120, -30), -120, -30, 0, 100);
+  // --- LÍNEA 3: Barra RSSI ---
+  int barraRSSI = map(constrain((int)r, -120, -30), -120, -30, 0, 100);
   display.drawProgressBar(0, 28, 120, 8, barraRSSI);
 
-  // --- LÍNEA 4: Estado de calidad CENTRADO (40-63px) ---
+  // --- LÍNEA 4: Calidad de señal ---
   String calidad;
-  if(rssi > -70) {
-    calidad = "EXCELENTE";
-  } else if(rssi > -85) {
-    calidad = "BUENA";
-  } else if(rssi > -100) {
-    calidad = "MEDIA";
-  } else if(rssi > -115) {
-    calidad = "DEBIL";
-  } else {
-    calidad = "MUY DEBIL";
-  }
+  if(r > -70)       calidad = "EXCELENTE";
+  else if(r > -85)  calidad = "BUENA";
+  else if(r > -100) calidad = "MEDIA";
+  else if(r > -115) calidad = "DEBIL";
+  else              calidad = "MUY DEBIL";
 
-  // Calidad también depende del SNR
-  if(snr < 0 && rssi > -100) {
-    calidad = "RUIDOSA";
-  }
+  if(s < 0 && r > -100) calidad = "RUIDOSA";
 
-  // Estado centrado y grande
   display.setFont(ArialMT_Plain_16);
   display.setTextAlignment(TEXT_ALIGN_CENTER);
   display.drawString(64, 48, calidad);
   display.setTextAlignment(TEXT_ALIGN_LEFT);
 
   display.display();
+}
 
-  // --- CALCULAR PPS (Paquetes Por Segundo) ---
-  if(millis() - tiempoSegundo >= 1000) {
-    paquetesPorSegundo = contadorTemporal;
-    contadorTemporal = 0;
-    tiempoSegundo = millis();
+// ================================================================
+// TASK CORE 0: Refresco de pantalla OLED
+// Completamente independiente de la recepción LoRa
+// ================================================================
+void taskOLED(void *pvParameters) {
+  for(;;) {
+    // Tomar mutex antes de dibujar (evita corrupción I2C si en algún
+    // momento el Core 1 también accediera al display)
+    if(xSemaphoreTake(mutexDisplay, pdMS_TO_TICKS(50)) == pdTRUE) {
+      actualizarOLED();
+      xSemaphoreGive(mutexDisplay);
+    }
+
+    // Dormir 250ms sin bloquear nada
+    vTaskDelay(pdMS_TO_TICKS(250));
   }
 }
 
@@ -203,15 +193,12 @@ void setup() {
 
   // Inicializar LoRa
   loraSPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_NSS);
-
-  // MISMA CONFIG QUE TX: BW 500.0, SF 7
   int state = radio.begin(LORA_BAND, LORA_BW, LORA_SF, LORA_CR, 0x12, LORA_POWER);
   radio.setDio1Action(setFlag);
 
   if(state == RADIOLIB_ERR_NONE) {
     Serial.println("[LoRa] Receptor listo");
 
-    // Pantalla de confirmación
     display.clear();
     display.setFont(ArialMT_Plain_16);
     display.setTextAlignment(TEXT_ALIGN_CENTER);
@@ -222,10 +209,7 @@ void setup() {
     display.display();
     delay(1000);
 
-    // Empezamos a escuchar
     radio.startReceive();
-
-    // Inicializar timer para PPS
     tiempoSegundo = millis();
 
   } else {
@@ -280,12 +264,9 @@ void loop() {
       paquetesRecibidos++;
       contadorTemporal++;
 
-      Serial.print("t"); // Inicio de trama estándar
-
-      // ID (Debe ser siempre 3 caracteres hexadecimales)
-      // Ejemplo: ID 0x1A -> "01A"
-      if (packet.canId < 0x100) Serial.print("0");
-      if (packet.canId < 0x10)  Serial.print("0");
+      // Volcar CSV por Serial
+      //Serial.print(packet.packetId);
+      //Serial.print(",");
       Serial.print(packet.canId, HEX);
 
       for(int i = 0; i < packet.len; i++) {
@@ -293,9 +274,7 @@ void loop() {
         if(packet.data[i] < 0x10) Serial.print("0");
         Serial.print(packet.data[i], HEX);
       }
-
-      // Terminador (Retorno de carro, vital para python-can)
-      Serial.write('\r');
+      Serial.println();
 
     } else {
       paquetesCorruptos++;
@@ -303,11 +282,5 @@ void loop() {
 
     // Volver a escuchar inmediatamente
     radio.startReceive();
-  }
-
-  // --- ACTUALIZAR PANTALLA CADA 250ms ---
-  if(millis() - ultimaActualizacion > 250) {
-    ultimaActualizacion = millis();
-    actualizarOLED();
   }
 }
