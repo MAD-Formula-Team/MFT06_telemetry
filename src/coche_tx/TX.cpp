@@ -43,8 +43,6 @@ void taskLoRa(void *pvParameters) {
   Serial.println("[LoRa] Task OK en Core 0");
 
   for(;;) {
-    // Espera bloqueante: duerme hasta que llegue algo a la cola
-    // Timeout 100ms para no quedarse colgado para siempre
     if(xQueueReceive(colaLoRa, &packet, pdMS_TO_TICKS(100)) == pdTRUE) {
       
       // Esperar a que la radio esté libre (con timeout de seguridad)
@@ -63,11 +61,64 @@ void taskLoRa(void *pvParameters) {
   }
 }
 
+// void taskCAN(void *pvParameters){
+//   Serial.begin(921600);
+
+//   // 1. INICIALIZAR CAN
+//   SPI.begin(CAN_SCK, CAN_MISO, CAN_MOSI, CAN_CS);
+//   if(CAN0.begin(MCP_ANY, CAN_1000KBPS, MCP_8MHZ) == CAN_OK) {
+//     CAN0.setMode(MCP_NORMAL);
+//     Serial.println("[CAN] OK");
+//   } else {
+//     Serial.println("[CAN] FALLO");
+//     while(1);
+//   }
+//   for(;;) {
+//     if(CAN0.checkReceive() == CAN_MSGAVAIL) {
+//       long unsigned int rxId;
+//       unsigned char     len;
+//       unsigned char     rxBuf[8];
+
+//       CAN0.readMsgBuf(&rxId, &len, rxBuf);
+//       
+//       // Filtrar ID 0x3A4: solo enviar cada 10 mensajes
+//       if(rxId == 0x3A4) {
+//         contador3A4++;
+//         if(contador3A4 < 20) {
+//           continue; // Ignorar este mensaje
+//         }
+//         contador3A4 = 0; // Resetear contador
+//       }
+//       
+//       if(txReady) {
+//         txReady = false; 
+
+//         packet.canId = rxId;
+//         packet.len = len;
+//         memcpy(packet.data, rxBuf, 8); 
+
+//         if(xQueueSend(colaLoRa, &packet, 0) != pdTRUE) {
+//           Serial.println("[ERROR] No se pudo enviar a la cola LoRa");
+//         }
+
+//       } else {
+//         txReady = true; 
+//       }
+//     }
+//   }
+// }
 
 void setup() {
+  // Crear la cola ANTES de lanzar las tareas
+  colaLoRa = xQueueCreate(COLA_SIZE, sizeof(TelemetryPacket));
+  if(colaLoRa == NULL) {
+    Serial.println("[ERROR] No se pudo crear la cola LoRa");
+    while(1);
+  }
+  
   Serial.begin(921600);
 
-  // 1. INICIALIZAR CAN
+  // Inicializar CAN en el setup
   SPI.begin(CAN_SCK, CAN_MISO, CAN_MOSI, CAN_CS);
   if(CAN0.begin(MCP_ANY, CAN_1000KBPS, MCP_8MHZ) == CAN_OK) {
     CAN0.setMode(MCP_NORMAL);
@@ -77,52 +128,37 @@ void setup() {
     while(1);
   }
 
-  // 2. INICIALIZAR LORA 
-  loraSPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_NSS);
-  int state = radio.begin(LORA_BAND, LORA_BW, LORA_SF, LORA_CR, 0x12, LORA_POWER);
-  radio.setDio1Action(setFlag);
-
-  if (state == RADIOLIB_ERR_NONE) {
-    Serial.println("[LoRa] OK .");
-    Serial.println("[CAN] Esperando mensajes CAN...\n");
-  } else {
-    Serial.print("[LoRa] Fallo código: ");
-    Serial.println(state);
-    while(1);
-  }
+  // Solo lanzar tarea LoRa, CAN ahora corre en loop()
+  xTaskCreatePinnedToCore(taskLoRa,"TaskLoRa",4096,NULL,2,NULL,0);
+  //xTaskCreatePinnedToCore(taskCAN,"TaskCAN",4096,NULL,1,NULL,1);
+  Serial.println("[SYSTEM] Task LoRa lanzada");
 }
 
 void loop() {
+  // Ahora el CAN se maneja en el loop() en lugar de taskCAN
   if(CAN0.checkReceive() == CAN_MSGAVAIL) {
     long unsigned int rxId;
-    unsigned char len;
-    unsigned char rxBuf[8];
+    unsigned char     len;
+    unsigned char     rxBuf[8];
 
     CAN0.readMsgBuf(&rxId, &len, rxBuf);
-
-    uint16_t canId = (uint16_t)rxId;
-
-
-    // if((canId == 0x3A4) && ( contador3A4 >= 20)) {
-    //   contador3A4 = 0; // Reiniciar contador
-    // } else if (canId == 0x3A4) {
-    //   contador3A4++;
-    //   return; }
-
-    if (canId != 0x3A3) {
-        return; // Ignorar este mensaje
+    
+    // Filtrar ID 0x3A4: solo enviar cada 20 mensajes
+    if(rxId == 0x3A4) {
+      contador3A4++;
+      if(contador3A4 < 20) {
+        return; // Salir del loop, no enviar este mensaje
+      }
+      contador3A4 = 0; // Resetear contador
     }
-    if(txReady) {
-      txReady = false; // Marcamos ocupado
+    
+    // Enviar a la cola LoRa
+    packet.canId = rxId;
+    packet.len = len;
+    memcpy(packet.data, rxBuf, 8); 
 
-      packet.canId = canId;
-      packet.len = len;
-      memcpy(packet.data, rxBuf, 8); 
-
-      radio.startTransmit((uint8_t*)&packet, sizeof(packet));
-
-    } else {
-      txReady = true; // Reset forzado
+    if(xQueueSend(colaLoRa, &packet, 0) != pdTRUE) {
+      // Cola llena, descartamos el paquete silenciosamente
     }
   }
 }
