@@ -14,9 +14,16 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QGroupBox, QPlainTextEdit, QCheckBox, QPushButton,
                              QScrollArea, QSplitter, QFileDialog, QMessageBox, QRadioButton,
                              QButtonGroup, QTableWidget, QTableWidgetItem, QHeaderView,
-                             QComboBox, QStackedWidget, QLineEdit)
+                             QComboBox, QStackedWidget, QLineEdit, QFrame)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer, QMutex
 from PyQt6.QtGui import QFont, QColor
+from ui_theme import (
+    APP_STYLESHEET,
+    nav_button_style,
+    status_label_style,
+    popup_button_style,
+    action_button_style,
+)
 
 # --- CONFIGURACIÓN ---
 CAN_BITRATE = 1000000
@@ -26,8 +33,8 @@ DBC_FILE = os.path.join(SCRIPT_DIR, "mft04.dbc")
 CAN_INTERFACE_TYPE = 'robotell' 
 REFRESH_RATE_MS = 50  # Refresco más fluido para cronómetro y tablas (20 FPS)
 LAPTIMER_CAN_ID = 0x777
-LAPTIMER_LAST_LAP_TEXT = "Última vuelta"
-LAPTIMER_EMPTY_FOOTER_TEXT = "Sin vueltas registradas"
+LAPTIMER_LAST_LAP_TEXT = "ULTIMA VUELTA"
+LAPTIMER_EMPTY_FOOTER_TEXT = "SIN VUELTAS REGISTRADAS"
 
 # Paleta de colores para las gráficas (se reciclan si eliges muchas señales)
 GRAPH_COLORS = [
@@ -453,13 +460,15 @@ class IndividualPlotWidget(QWidget):
     # Señal para sincronizar crosshair entre gráficas
     crosshair_moved = pyqtSignal(float)  # Emite posición X del mouse
     
-    def __init__(self, signal_name, color, data_store, sliding_window=True, window_duration=15.0):
+    def __init__(self, signal_name, color, data_store, sliding_window=True, window_duration=15.0, display_name=None, y_range=None):
         super().__init__()
         self.signal_name = signal_name
+        self.display_name = display_name or signal_name
         self.data_store = data_store
         self.color = color
         self.sliding_window = sliding_window
         self.window_duration = window_duration  # Duración de ventana deslizante en segundos
+        self.y_range = y_range
         
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -467,7 +476,7 @@ class IndividualPlotWidget(QWidget):
         self.setLayout(layout)
         
         # Título con valor actual
-        self.title_label = QLabel(f"<b>{signal_name}</b>: ---")
+        self.title_label = QLabel(f"<b>{self.display_name}</b>: ---")
         self.title_label.setStyleSheet(f"color: {color}; font-size: 11pt; padding: 2px;")
         layout.addWidget(self.title_label)
         
@@ -483,6 +492,8 @@ class IndividualPlotWidget(QWidget):
         # Configurar ejes
         self.plot_widget.setLabel('bottom', 'Tiempo', units='s')
         self.plot_widget.getAxis('bottom').setStyle(tickTextOffset=5)
+        if self.y_range is not None:
+            self.plot_widget.setYRange(self.y_range[0], self.y_range[1], padding=0)
         
         # Curva
         pen = pg.mkPen(color=color, width=2)
@@ -550,7 +561,7 @@ class IndividualPlotWidget(QWidget):
         if 0 <= idx < len(self.cached_values):
             value = self.cached_values[idx]
             timestamp = self.cached_timestamps[idx]
-            self.title_label.setText(f"<b>{self.signal_name}</b>: {value:.2f} @ {timestamp:.2f}s")
+            self.title_label.setText(f"<b>{self.display_name}</b>: {value:.2f} @ {timestamp:.2f}s")
     
     def get_value_at_time(self, x_pos):
         """Retorna el valor en un timestamp específico (para popup)"""
@@ -572,7 +583,7 @@ class IndividualPlotWidget(QWidget):
     def hide_crosshair(self):
         """Oculta el crosshair"""
         self.vline.setVisible(False)
-        self.title_label.setText(f"<b>{self.signal_name}</b>: ---")
+        self.title_label.setText(f"<b>{self.display_name}</b>: ---")
     
     def set_window_mode(self, mode, duration=None):
         """Cambia el modo de ventana temporal
@@ -596,6 +607,9 @@ class IndividualPlotWidget(QWidget):
             # Cachear para búsqueda rápida
             self.cached_timestamps = timestamps
             self.cached_values = values
+
+            if self.y_range is not None:
+                self.plot_widget.setYRange(self.y_range[0], self.y_range[1], padding=0)
             
             # Aplicar sliding window si está habilitado
             if self.sliding_window and timestamps:
@@ -607,82 +621,170 @@ class IndividualPlotWidget(QWidget):
         """Retorna el ViewBox para sincronización"""
         return self.plot_widget.getViewBox()
 
+class SkidpadTrackWidget(QWidget):
+    """Widget personalizado para dibujar el circuito en forma de 8 y los tiempos."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(600, 300)
+        
+        # Tiempos almacenados
+        self.time_r1 = 0.0
+        self.time_r2 = 0.0
+        self.time_l1 = 0.0
+        self.time_l2 = 0.0
+        
+        # Estado actual para resaltado visual (0=IDLE, 1=R1, 2=R2, 3=L1, 4=L2)
+        self.active_section = 0
+        
+    def update_times(self, r1, r2, l1, l2, active_section):
+        self.time_r1 = r1
+        self.time_r2 = r2
+        self.time_l1 = l1
+        self.time_l2 = l2
+        self.active_section = active_section
+        self.update() # Forzar repintado
+        
+    def paintEvent(self, event):
+        from PyQt6.QtGui import QPainter, QColor, QFont, QPen
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        width = self.width()
+        height = self.height()
+        
+        # Geometría básica de los círculos
+        circle_radius = min(width // 4, height // 2) - 20
+        center_y = height // 2
+        left_center_x = width // 2 - circle_radius
+        right_center_x = width // 2 + circle_radius
+        
+        # Estilos de dibujo
+        track_pen = QPen(QColor("#11151c"), 40)
+        active_pen = QPen(QColor("#00e676"), 40)
+        text_pen = QPen(QColor("#ffffff"))
+        font = QFont("Consolas", 12, QFont.Weight.Bold)
+        painter.setFont(font)
+        
+        # Dibujar Círculo Izquierdo
+        painter.setPen(active_pen if self.active_section in [3, 4] else track_pen)
+        painter.drawEllipse(int(left_center_x - circle_radius), int(center_y - circle_radius), 
+                            int(circle_radius * 2), int(circle_radius * 2))
+        
+        # Dibujar Círculo Derecho
+        painter.setPen(active_pen if self.active_section in [1, 2] else track_pen)
+        painter.drawEllipse(int(right_center_x - circle_radius), int(center_y - circle_radius), 
+                            int(circle_radius * 2), int(circle_radius * 2))
+        
+        # Textos Izquierda
+        painter.setPen(text_pen)
+        l1_text = f"V1 Izq: {self.time_l1:.3f} s" if self.time_l1 > 0 else "V1 Izq: --.--- s"
+        l2_text = f"V2 Izq: {self.time_l2:.3f} s" if self.time_l2 > 0 else "V2 Izq: --.--- s"
+        painter.drawText(int(left_center_x - 70), int(center_y - 15), l1_text)
+        painter.drawText(int(left_center_x - 70), int(center_y + 25), l2_text)
+        
+        # Textos Derecha
+        r1_text = f"V1 Der: {self.time_r1:.3f} s" if self.time_r1 > 0 else "V1 Der: --.--- s"
+        r2_text = f"V2 Der: {self.time_r2:.3f} s" if self.time_r2 > 0 else "V2 Der: --.--- s"
+        painter.drawText(int(right_center_x - 70), int(center_y - 15), r1_text)
+        painter.drawText(int(right_center_x - 70), int(center_y + 25), r2_text)
+
 # --- Ventana Principal ---
 class TelemetryWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("RoboWin - QT MultiGraph")
+        self.setWindowTitle("ROBOWIN")
         self.resize(1366, 800)
 
-        self.setStyleSheet("""
-            QMainWindow { background-color: #1e1e1e; color: #ffffff; }
-            QLabel { color: #e0e0e0; font-family: 'Segoe UI', sans-serif; }
-            QGroupBox { 
-                border: 1px solid #444; 
-                border-radius: 5px; 
-                margin-top: 10px; 
-                font-weight: bold; 
-                color: #00acc1;
-                background-color: #252525;
-            }
-            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 3px; }
-            QTabWidget::pane { border: 1px solid #444; background-color: #1e1e1e; }
-            QTabBar::tab { background: #333; color: #aaa; padding: 8px 20px; }
-            QTabBar::tab:selected { background: #444; color: white; border-bottom: 2px solid #00e676; }
-            QCheckBox { color: #aaa; spacing: 5px; }
-            QCheckBox::indicator { width: 15px; height: 15px; border: 1px solid #666; border-radius: 2px; }
-            QCheckBox::indicator:checked { background-color: #00e676; border-color: #00e676; }
-        """)
+        self.setStyleSheet(APP_STYLESHEET)
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-        # Barra de estado con toggle popup
-        status_bar_layout = QHBoxLayout()
+        # NavBar horizontal estilo web
+        navbar_layout = QHBoxLayout()
+        navbar_layout.setContentsMargins(4, 4, 4, 4)
+        navbar_layout.setSpacing(0)
         
+        navbar_widget = QWidget()
+        navbar_widget.setStyleSheet(
+            "background-color: #202020; border-bottom: 1px solid #3a3a3a;"
+        )
+        navbar_widget.setMaximumHeight(50)
+        navbar_widget.setLayout(navbar_layout)
+        main_layout.addWidget(navbar_widget)
+        
+        # Botones de navegación
+        navbar_layout.setSpacing(0)
+        navbar_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.nav_btn_dashboard = self.create_nav_button("DASHBOARD", 0, active=True)
+        navbar_layout.addWidget(self.nav_btn_dashboard)
+
+        self.nav_btn_todo = self.create_nav_button("TODO", 1)
+        navbar_layout.addWidget(self.nav_btn_todo)
+        
+        self.nav_btn_laptimer = self.create_nav_button("LAP TIMER", 2)
+        navbar_layout.addWidget(self.nav_btn_laptimer)
+        
+        self.nav_btn_monitor = self.create_nav_button("Monitor CAN", 3)
+        navbar_layout.addWidget(self.nav_btn_monitor)
+        
+        self.nav_btn_offline = self.create_nav_button("OFFLINE", 4)
+        navbar_layout.addWidget(self.nav_btn_offline)
+        
+        navbar_layout.addStretch()
+        
+        # Estado y controles a la derecha
         self.status_label = QLabel("Iniciando sistema...")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
-        status_bar_layout.addWidget(self.status_label, stretch=1)
+        self.status_label.setStyleSheet(status_label_style())
+        self.status_label.setMaximumWidth(300)
+        navbar_layout.addWidget(self.status_label)
         
-        # Botón toggle popup
-        self.popup_toggle_btn = QPushButton("💬 Popup: OFF")
-        self.popup_toggle_btn.setStyleSheet("background-color: #555; color: #aaa; padding: 5px 15px; border-radius: 3px; font-weight: bold;")
-        self.popup_toggle_btn.setMaximumWidth(150)
+        self.popup_toggle_btn = QPushButton("POPUP OFF")
+        self.popup_toggle_btn.setStyleSheet(popup_button_style(False))
+        self.popup_toggle_btn.setMaximumWidth(100)
+        self.popup_toggle_btn.setMaximumHeight(34)
         self.popup_toggle_btn.clicked.connect(self.toggle_popup)
-        self.popup_toggle_btn.setToolTip("Toggle popup de valores (Atajo: F2)")
-        status_bar_layout.addWidget(self.popup_toggle_btn)
+        self.popup_toggle_btn.setToolTip("POPUP (F2)")
+        navbar_layout.addWidget(self.popup_toggle_btn)
         
-        main_layout.addLayout(status_bar_layout)
-
-        self.main_tabs = QTabWidget()
-        main_layout.addWidget(self.main_tabs)
+        # Stacked widget para páginas
+        pages_layout = QVBoxLayout()
+        pages_layout.setContentsMargins(0, 0, 0, 0)
+        pages_layout.setSpacing(0)
+        
+        self.pages_stack = QStackedWidget()
+        pages_layout.addWidget(self.pages_stack)
+        main_layout.addLayout(pages_layout, 1)
 
         self.ui_labels = {} 
         self.checkboxes = {} 
-        self.plot_widgets = {}  # Diccionario de gráficas individuales
-        self.color_assignment = {}  # Asignación de colores por señal
+        self.plot_widgets = {}
+        self.dashboard_plot_widgets = {}
+        self.dashboard_metric_labels = {}
+        self.color_assignment = {}
         
-        # DataStore compartido
         self.data_store = TelemetryDataStore(max_points=10000)
-        
-        # Estado del popup (toggle con F2)
+        self.signal_catalog = self.load_dbc_signal_catalog()
+        self.signals_by_group = self.group_signals_by_category(self.signal_catalog)
+        self.dashboard_critical_signals = self.select_dashboard_critical_signals()
         self.popup_enabled = False
-        
-        # Modo de ventana temporal actual (15s por defecto)
         self.current_window_mode = 'sliding'
         self.current_window_duration = 15.0
         
-        # Popup flotante para valores
         self.value_popup = QLabel(self)
         self.value_popup.setStyleSheet("""
             QLabel {
                 background-color: rgba(40, 40, 40, 230);
                 color: white;
                 border: 2px solid #00e676;
-                border-radius: 5px;
-                padding: 10px;
+                border-radius: 0px;
+                padding: 6px;
                 font-family: 'Consolas', monospace;
                 font-size: 10pt;
             }
@@ -691,25 +793,27 @@ class TelemetryWindow(QMainWindow):
         self.value_popup.setWordWrap(False)
         self.value_popup.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
-        # --- TAB 1: DASHBOARD ---
         self.dashboard_tab = QWidget()
         self.setup_dashboard_ui()
-        self.main_tabs.addTab(self.dashboard_tab, "Dashboard Principal")
+        self.pages_stack.addWidget(self.dashboard_tab)
 
-        # --- TAB 2: TRAZAS CAN ---
+        self.todo_tab = QWidget()
+        self.setup_todo_ui()
+        self.pages_stack.addWidget(self.todo_tab)
+
         self.laptimer_tab = QWidget()
         self.setup_laptimer_ui()
-        self.main_tabs.addTab(self.laptimer_tab, "⏱ Lap Timer")
+        self.pages_stack.addWidget(self.laptimer_tab)
 
-        # --- TAB 3: TRAZAS CAN ---
         self.traces_tab = QWidget()
         self.setup_traces_ui()
-        self.main_tabs.addTab(self.traces_tab, "Monitor CAN")
+        self.pages_stack.addWidget(self.traces_tab)
         
-        # --- TAB 4: ANÁLISIS OFFLINE ---
         self.offline_tab = QWidget()
         self.setup_offline_ui()
-        self.main_tabs.addTab(self.offline_tab, "📊 Análisis Offline")
+        self.pages_stack.addWidget(self.offline_tab)
+
+        self.switch_page(0)
 
         # Worker
         self.can_worker = CanWorker(self.data_store)
@@ -726,28 +830,328 @@ class TelemetryWindow(QMainWindow):
         # Activar gráficas por defecto después de que se cree la UI
         QTimer.singleShot(100, self.activate_default_graphs)
 
+    def create_nav_button(self, label, page_index, active=False):
+        button = QPushButton(label)
+        button.setStyleSheet(nav_button_style(active))
+        button.setMaximumHeight(34)
+        button.clicked.connect(lambda: self.switch_page(page_index))
+        return button
+
+    def classify_signal_group(self, message_name):
+        name = (message_name or "").lower()
+        if name.startswith("engine"):
+            return "MOTOR"
+        if name.startswith("currents"):
+            return "ELECTRICO"
+        if name in {"steering", "dampers"}:
+            return "CHASIS"
+        return "OTROS"
+
+    def load_dbc_signal_catalog(self):
+        catalog = []
+        try:
+            db = cantools.database.load_file(DBC_FILE)
+        except Exception as exc:
+            print(f"[DBC] No se pudo cargar catálogo UI desde DBC: {exc}")
+            return catalog
+
+        for message in db.messages:
+            group = self.classify_signal_group(getattr(message, "name", ""))
+            for signal in message.signals:
+                minimum = signal.minimum
+                maximum = signal.maximum
+                y_range = None
+                if minimum is not None and maximum is not None and minimum < maximum:
+                    y_range = (minimum, maximum)
+
+                label = signal.name.replace("_", " ").upper()
+                catalog.append({
+                    "key": signal.name,
+                    "label": label,
+                    "unit": signal.unit or "",
+                    "group": group,
+                    "message": getattr(message, "name", ""),
+                    "y_range": y_range,
+                })
+
+        return catalog
+
+    def group_signals_by_category(self, catalog):
+        grouped = {"MOTOR": [], "CHASIS": [], "ELECTRICO": [], "OTROS": []}
+        for signal in catalog:
+            grouped.setdefault(signal["group"], []).append(signal)
+        return grouped
+
+    def select_dashboard_critical_signals(self):
+        preferred_keys = ["ect", "oil_temp", "batt_volt"]
+        by_key = {sig["key"]: sig for sig in self.signal_catalog}
+
+        selected = [by_key[key] for key in preferred_keys if key in by_key]
+        if len(selected) == len(preferred_keys):
+            return selected
+
+        # Fallback seguro si faltara alguna señal en el DBC
+        motor_signals = list(self.signals_by_group.get("MOTOR", []))
+        if len(motor_signals) >= 3:
+            return motor_signals[:3]
+
+        return list(self.signal_catalog)[:3]
+
     def setup_dashboard_ui(self):
+        layout = QHBoxLayout(self.dashboard_tab)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setHandleWidth(1)
+        splitter.setChildrenCollapsible(False)
+        layout.addWidget(splitter)
+
+        # --- COLUMNA 1: LAPTIME ---
+        laptime_panel = QWidget()
+        laptime_layout = QVBoxLayout(laptime_panel)
+        laptime_layout.setContentsMargins(6, 6, 6, 6)
+        laptime_layout.setSpacing(8)
+
+        laptime_group = QGroupBox("LAPTIME")
+        laptime_group_layout = QVBoxLayout(laptime_group)
+        laptime_group_layout.setContentsMargins(8, 8, 8, 8)
+        laptime_group_layout.setSpacing(8)
+
+        self.dashboard_session_mode_label = QLabel("SESION ACTUAL: --")
+        self.dashboard_session_mode_label.setStyleSheet("color: #ffd166; font-size: 12pt; font-weight: 700;")
+        laptime_group_layout.addWidget(self.dashboard_session_mode_label)
+
+        self.dashboard_session_state_label = QLabel("ESTADO: --")
+        self.dashboard_session_state_label.setStyleSheet("color: #dbe7f4; background-color: #1b2230; border: 1px solid #426084; border-radius: 0px; padding: 6px 10px; font-size: 10pt;")
+        laptime_group_layout.addWidget(self.dashboard_session_state_label)
+
+        self.dashboard_total_time_label = QLabel("00:00.000")
+        self.dashboard_total_time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.dashboard_total_time_label.setStyleSheet("background-color: #0f172a; color: #7dd3fc; border: 2px solid #2563eb; border-radius: 0px; font-size: 28px; font-weight: 800; padding: 14px 12px;")
+        laptime_group_layout.addWidget(self.dashboard_total_time_label)
+
+        summary_row = QHBoxLayout()
+        summary_row.setSpacing(6)
+        self.dashboard_laps_count_label = QLabel("VUELTAS: 0")
+        self.dashboard_last_lap_label = QLabel("ULTIMA: --:--.---")
+        for label in [self.dashboard_laps_count_label, self.dashboard_last_lap_label]:
+            label.setStyleSheet("color: #f1f5f9; background-color: #252a35; border: 1px solid #3a3a3a; border-radius: 0px; padding: 6px 10px; font-size: 10pt;")
+            summary_row.addWidget(label)
+        laptime_group_layout.addLayout(summary_row)
+
+        self.dashboard_laps_table = QTableWidget(0, 4)
+        self.dashboard_laps_table.setHorizontalHeaderLabels(["VUELTA", "TIEMPO", "DELTA", "ESTADO"])
+        self.dashboard_laps_table.verticalHeader().setVisible(False)
+        self.dashboard_laps_table.setAlternatingRowColors(True)
+        self.dashboard_laps_table.setStyleSheet(
+            "QTableWidget {background-color: #11151c; color: #f8fafc; border: 1px solid #2f3746; gridline-color: #2f3746; font-size: 10pt;} "
+            "QHeaderView::section {background-color: #1f2937; color: #e6edf7; font-weight: 700; padding: 6px; border: 1px solid #2f3746;}"
+        )
+        dashboard_header = self.dashboard_laps_table.horizontalHeader()
+        dashboard_header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        dashboard_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        dashboard_header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        dashboard_header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        laptime_group_layout.addWidget(self.dashboard_laps_table, 1)
+
+        laptime_layout.addWidget(laptime_group)
+        splitter.addWidget(laptime_panel)
+
+        # --- COLUMNA 2: VARIABLES CRITICAS ---
+        metrics_panel = QWidget()
+        metrics_layout = QVBoxLayout(metrics_panel)
+        metrics_layout.setContentsMargins(6, 6, 6, 6)
+        metrics_layout.setSpacing(8)
+
+        metrics_group = QGroupBox("VARIABLES CRITICAS")
+        metrics_group_layout = QVBoxLayout(metrics_group)
+        metrics_group_layout.setContentsMargins(8, 8, 8, 8)
+        metrics_group_layout.setSpacing(8)
+
+        cards_grid = QGridLayout()
+        cards_grid.setHorizontalSpacing(8)
+        cards_grid.setVerticalSpacing(8)
+        cards = []
+        for idx, signal in enumerate(self.dashboard_critical_signals):
+            cards.append((signal["label"], signal["key"], signal["unit"], GRAPH_COLORS[idx % len(GRAPH_COLORS)]))
+
+        self.dashboard_metric_labels = {}
+        for index, (title_text, signal_key, unit_text, color) in enumerate(cards):
+            card = QFrame()
+            card.setMinimumSize(100, 110)
+            card.setStyleSheet(
+                f"QFrame {{ background-color: #171c24; border: 1px solid {color}; border-radius: 0px; }}"
+            )
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(10, 10, 10, 10)
+            card_layout.setSpacing(4)
+
+            card_title = QLabel(title_text)
+            card_title.setStyleSheet("color: #cbd5e1; font-size: 10pt; font-weight: 700;")
+            card_layout.addWidget(card_title)
+
+            card_value = QLabel("--")
+            card_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            card_value.setStyleSheet(f"color: {color}; font-size: 24px; font-weight: 800;")
+            card_layout.addWidget(card_value, 1)
+
+            card_unit = QLabel(unit_text)
+            card_unit.setAlignment(Qt.AlignmentFlag.AlignRight)
+            card_unit.setStyleSheet("color: #9fb3c8; font-size: 9pt;")
+            card_layout.addWidget(card_unit)
+
+            if signal_key is not None:
+                self.dashboard_metric_labels[signal_key] = card_value
+
+            row = index
+            col = 0
+            cards_grid.addWidget(card, row, col)
+
+        metrics_group_layout.addLayout(cards_grid)
+        metrics_group_layout.addStretch()
+        metrics_layout.addWidget(metrics_group)
+        splitter.addWidget(metrics_panel)
+
+        # --- COLUMNA 3: GRAFICAS ---
+        plots_panel = QWidget()
+        plots_layout = QVBoxLayout(plots_panel)
+        plots_layout.setContentsMargins(6, 6, 6, 6)
+        plots_layout.setSpacing(8)
+
+        plots_group = QGroupBox("GRAFICAS")
+        plots_group_layout = QVBoxLayout(plots_group)
+        plots_group_layout.setContentsMargins(8, 8, 8, 8)
+        plots_group_layout.setSpacing(8)
+
+        self.dashboard_plot_widgets = {}
+        dashboard_plots = []
+        for idx, signal in enumerate(self.dashboard_critical_signals):
+            dashboard_plots.append((
+                signal["key"],
+                signal["label"],
+                GRAPH_COLORS[idx % len(GRAPH_COLORS)],
+                signal.get("y_range"),
+            ))
+
+        for signal_name, display_name, color, y_range in dashboard_plots:
+            plot_widget = IndividualPlotWidget(
+                signal_name,
+                color,
+                self.data_store,
+                sliding_window=True,
+                window_duration=15.0,
+                display_name=display_name,
+                y_range=y_range,
+            )
+            plot_widget.setMinimumHeight(150)
+            plot_widget.setMaximumHeight(220)
+            self.dashboard_plot_widgets[signal_name] = plot_widget
+            plots_group_layout.addWidget(plot_widget)
+
+        plots_group_layout.addStretch()
+
+        self.dashboard_plots_scroll = QScrollArea()
+        self.dashboard_plots_scroll.setWidgetResizable(True)
+        self.dashboard_plots_scroll.setStyleSheet("QScrollArea { border: 1px solid #444; background-color: #1e1e1e; }")
+        self.dashboard_plots_container = QWidget()
+        self.dashboard_plots_container_layout = QVBoxLayout(self.dashboard_plots_container)
+        self.dashboard_plots_container_layout.setContentsMargins(0, 0, 0, 0)
+        self.dashboard_plots_container_layout.setSpacing(8)
+        self.dashboard_plots_container_layout.addWidget(plots_group)
+        self.dashboard_plots_container_layout.addStretch()
+        self.dashboard_plots_scroll.setWidget(self.dashboard_plots_container)
+        plots_layout.addWidget(self.dashboard_plots_scroll)
+        splitter.addWidget(plots_panel)
+
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(2, 5)
+        splitter.setSizes([320, 160, 800])
+
+    def update_dashboard_view(self, data_snapshot, times_snapshot):
+        session_mode = self.session_mode.upper() if self.session_mode else "--"
+        if self.session_running and not self.session_paused:
+            state_text = "EN CURSO"
+        elif self.session_paused:
+            state_text = "EN PAUSA"
+        elif self.session_laps:
+            state_text = "DETENIDO"
+        else:
+            state_text = "LISTO"
+
+        self.dashboard_session_mode_label.setText(f"SESION ACTUAL: {session_mode}")
+        self.dashboard_session_state_label.setText(f"ESTADO: {state_text}")
+
+        stopwatch_s = self.get_laptimer_stopwatch_seconds()
+        self.dashboard_total_time_label.setText(self.format_lap_time(stopwatch_s))
+        self.dashboard_laps_count_label.setText(f"VUELTAS: {len(self.session_laps)}")
+        last_lap = self.session_laps[-1] if self.session_laps else None
+        self.dashboard_last_lap_label.setText(f"ULTIMA: {self.format_lap_time(last_lap)}" if last_lap is not None else "ULTIMA: --:--.---")
+
+        best_lap = min(self.session_laps) if self.session_laps else None
+        table = self.dashboard_laps_table
+        table.setRowCount(len(self.session_laps))
+        for idx, lap_time in enumerate(self.session_laps):
+            delta = 0.0 if best_lap is None else lap_time - best_lap
+            if best_lap is not None and abs(delta) < 1e-9:
+                state = "BEST"
+            elif idx == len(self.session_laps) - 1:
+                state = "LAST"
+            else:
+                state = ""
+
+            values = [
+                str(idx + 1),
+                self.format_lap_time(lap_time),
+                f"+{delta:.3f}s" if delta > 0 else "0.000s",
+                state,
+            ]
+            for col, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                table.setItem(idx, col, item)
+
+        if not self.session_laps:
+            table.setRowCount(0)
+
+        for signal_name, label_widget in self.dashboard_metric_labels.items():
+            if signal_name not in data_snapshot:
+                label_widget.setText("--")
+                continue
+
+            value = data_snapshot[signal_name]
+            if isinstance(value, float):
+                label_widget.setText(f"{value:.2f}")
+            else:
+                label_widget.setText(str(value))
+
+        for plot_widget in self.dashboard_plot_widgets.values():
+            plot_widget.update_plot()
+
+    def setup_todo_ui(self):
         # Splitter principal: PANEL CONTROL | GRÁFICAS
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.dashboard_tab.setLayout(QVBoxLayout())
-        self.dashboard_tab.layout().addWidget(main_splitter)
+        main_splitter.setHandleWidth(1)
+        main_splitter.setChildrenCollapsible(False)
+        self.todo_tab.setLayout(QVBoxLayout())
+        self.todo_tab.layout().setContentsMargins(0, 0, 0, 0)
+        self.todo_tab.layout().setSpacing(0)
+        self.todo_tab.layout().addWidget(main_splitter)
         
         # --- PANEL IZQUIERDO: CONTROLES ---
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(5, 5, 5, 5)
+        left_layout.setContentsMargins(6, 6, 6, 6)
+        left_layout.setSpacing(8)
         
         # Botones de control
         control_group = QGroupBox("CONTROL")
         control_layout = QVBoxLayout()
+        control_layout.setContentsMargins(6, 6, 6, 6)
+        control_layout.setSpacing(6)
         
-        clear_btn = QPushButton("🗑️ Limpiar Datos")
-        clear_btn.setStyleSheet("background-color: #d32f2f; color: white; padding: 8px; font-weight: bold;")
-        clear_btn.clicked.connect(self.clear_all_data)
-        control_layout.addWidget(clear_btn)
-        
-        export_btn = QPushButton("💾 Exportar CSV")
-        export_btn.setStyleSheet("background-color: #388e3c; color: white; padding: 8px; font-weight: bold;")
+        export_btn = QPushButton("EXPORTAR DATOS")
+        export_btn.setStyleSheet(action_button_style("#388e3c", font_size_pt=9))
         export_btn.clicked.connect(self.export_to_csv)
         control_layout.addWidget(export_btn)
         
@@ -757,22 +1161,23 @@ class TelemetryWindow(QMainWindow):
         # Selector de ventana temporal
         window_group = QGroupBox("VENTANA TEMPORAL")
         window_layout = QVBoxLayout()
-        window_layout.setSpacing(5)
+        window_layout.setContentsMargins(6, 6, 6, 6)
+        window_layout.setSpacing(6)
         
         self.window_button_group = QButtonGroup()
         
-        self.rb_15s = QRadioButton("⏱ 15 segundos")
+        self.rb_15s = QRadioButton("15 SEGUNDOS")
         self.rb_15s.setChecked(True)
         self.rb_15s.toggled.connect(lambda checked: checked and self.change_window_mode('sliding', 15.0))
         window_layout.addWidget(self.rb_15s)
         self.window_button_group.addButton(self.rb_15s)
         
-        self.rb_5min = QRadioButton("⏱ 5 minutos")
+        self.rb_5min = QRadioButton("5 MINUTOS")
         self.rb_5min.toggled.connect(lambda checked: checked and self.change_window_mode('sliding', 300.0))
         window_layout.addWidget(self.rb_5min)
         self.window_button_group.addButton(self.rb_5min)
         
-        self.rb_full = QRadioButton("⏱ Todo el tiempo")
+        self.rb_full = QRadioButton("TODO EL TIEMPO")
         self.rb_full.toggled.connect(lambda checked: checked and self.change_window_mode('full', None))
         window_layout.addWidget(self.rb_full)
         self.window_button_group.addButton(self.rb_full)
@@ -787,31 +1192,20 @@ class TelemetryWindow(QMainWindow):
         
         scroll_content = QWidget()
         scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setContentsMargins(0, 0, 0, 0)
+        scroll_layout.setSpacing(6)
         
-        motor_group = self.create_data_group("MOTOR", [
-            ("ECT", "ect", "°C"), ("Oil Temp", "oil_temp", "°C"),
-            ("Oil Press", "oil_press", "bar"), ("Fuel Press", "fuel_press", "bar"),
-            ("RPM", "engine_rpm", "rpm"), ("Gear", "gear", ""),
-            ("Lambda", "lamda", ""), ("Throttle", "tp", "%"),
-            ("Bat Volt", "batt_volt", "V")
-        ])
-        scroll_layout.addWidget(motor_group)
+        for group_name in ["MOTOR", "CHASIS", "ELECTRICO", "OTROS"]:
+            group_signals = self.signals_by_group.get(group_name, [])
+            if not group_signals:
+                continue
 
-        chassis_group = self.create_data_group("CHASIS", [
-            ("Steering", "steering_wheel_angle", "°"), ("Brake", "brake_pressure", "bar"),
-            ("FL Speed", "front_left_wheel_speed", "km/h"), ("FR Speed", "front_right_wheel_speed", "km/h"),
-            ("RL Speed", "rear_left_speed", "km/h"), ("RR Speed", "rear_right_speed", "km/h"),
-            ("FL Damp", "front_left_damper", "mm"), ("FR Damp", "front_right_damper", "mm")
-        ])
-        scroll_layout.addWidget(chassis_group)
-
-        elec_group = self.create_data_group("ELÉCTRICO", [
-            ("Alt Curr", "alternator_current", "A"), ("Ign Curr", "ignition_current", "A"),
-            ("Inj Curr", "injection_current", "A"), ("Fuel Pmp", "fuel_pump_current", "A"),
-            ("Water Pmp", "water_pump_current", "A"), ("Fan Curr", "main_fan_current", "A"),
-            ("PDM Temp", "temp_pdm", "°C"), ("Lat", "latitude", "°")
-        ])
-        scroll_layout.addWidget(elec_group)
+            signals = [(sig["label"], sig["key"], sig["unit"]) for sig in group_signals]
+            if group_name == "MOTOR":
+                group_widget = self.create_data_group(group_name, signals, font_size=12, prominent=True)
+            else:
+                group_widget = self.create_data_group(group_name, signals)
+            scroll_layout.addWidget(group_widget)
         
         scroll_layout.addStretch()
         scroll_area.setWidget(scroll_content)
@@ -820,7 +1214,8 @@ class TelemetryWindow(QMainWindow):
         # --- PANEL DERECHO: GRÁFICAS ---
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setContentsMargins(6, 6, 6, 6)
+        right_layout.setSpacing(8)
         
         # ScrollArea para gráficas
         self.plots_scroll = QScrollArea()
@@ -829,7 +1224,8 @@ class TelemetryWindow(QMainWindow):
         
         self.plots_container = QWidget()
         self.plots_layout = QVBoxLayout(self.plots_container)
-        self.plots_layout.setSpacing(10)
+        self.plots_layout.setContentsMargins(0, 0, 0, 0)
+        self.plots_layout.setSpacing(0)
         self.plots_layout.addStretch()
         
         self.plots_scroll.setWidget(self.plots_container)
@@ -839,12 +1235,12 @@ class TelemetryWindow(QMainWindow):
         main_splitter.addWidget(left_panel)
         main_splitter.addWidget(right_panel)
         main_splitter.setStretchFactor(0, 1)  # Panel izquierdo: 1 parte
-        main_splitter.setStretchFactor(1, 3)  # Panel derecho: 3 partes
-        main_splitter.setSizes([350, 1000])
+        main_splitter.setStretchFactor(1, 5)  # Panel derecho: 5 partes (más ancho para gráficas)
+        main_splitter.setSizes([220, 1130])
 
     def setup_traces_ui(self):
         layout = QVBoxLayout(self.traces_tab)
-        info_label = QLabel("Monitor CAN - Traducción en tiempo real")
+        info_label = QLabel("Monitor CAN en tiempo real: Muestra datos en bruto")
         info_label.setStyleSheet("color: #aaa; font-style: italic;")
         layout.addWidget(info_label)
 
@@ -865,88 +1261,62 @@ class TelemetryWindow(QMainWindow):
     def setup_offline_ui(self):
         """Tab para análisis offline de archivos CSV"""
         layout = QVBoxLayout(self.offline_tab)
-        
-        # Header con botón de carga
-        header_layout = QHBoxLayout()
-        
-        info_label = QLabel("📁 Análisis Offline - Carga archivos CSV exportados para visualización")
-        info_label.setStyleSheet("color: #aaa; font-style: italic; font-size: 11pt;")
-        header_layout.addWidget(info_label)
-        
-        header_layout.addStretch()
-        
-        load_btn = QPushButton("📂 Cargar CSV")
-        load_btn.setStyleSheet("background-color: #1976d2; color: white; padding: 10px 20px; font-weight: bold; font-size: 11pt;")
-        load_btn.clicked.connect(self.load_csv_file)
-        header_layout.addWidget(load_btn)
-
-        load_sessions_btn = QPushButton("🏁 Cargar Sesiones CSV")
-        load_sessions_btn.setStyleSheet("background-color: #455a64; color: white; padding: 10px 20px; font-weight: bold; font-size: 11pt;")
-        load_sessions_btn.clicked.connect(self.load_laptimer_sessions_csv_file)
-        header_layout.addWidget(load_sessions_btn)
-        
-        layout.addLayout(header_layout)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         
         # Splitter similar al dashboard en vivo
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        main_splitter.setHandleWidth(1)
+        main_splitter.setChildrenCollapsible(False)
         
         # Panel izquierdo: controles
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(6, 6, 6, 6)
+        left_layout.setSpacing(8)
         
         control_group = QGroupBox("CONTROL")
         control_layout = QVBoxLayout()
+        control_layout.setContentsMargins(6, 6, 6, 6)
+        control_layout.setSpacing(6)
         
-        clear_btn = QPushButton("🗑️ Limpiar")
-        clear_btn.setStyleSheet("background-color: #d32f2f; color: white; padding: 8px; font-weight: bold;")
-        clear_btn.clicked.connect(self.clear_all_data)
-        control_layout.addWidget(clear_btn)
+        load_csv_btn = QPushButton("CARGAR CSV")
+        load_csv_btn.setStyleSheet(action_button_style("#455a64", font_size_pt=9))
+        load_csv_btn.clicked.connect(self.load_csv_file)
+        control_layout.addWidget(load_csv_btn)
         
         control_group.setLayout(control_layout)
         left_layout.addWidget(control_group)
-        
-        # Scroll con checkboxes (se llenará dinámicamente al cargar CSV)
-        self.offline_scroll = QScrollArea()
-        self.offline_scroll.setWidgetResizable(True)
-        self.offline_scroll.setStyleSheet("QScrollArea { border: none; }")
-        
-        self.offline_signals_widget = QWidget()
-        self.offline_signals_layout = QVBoxLayout(self.offline_signals_widget)
-        self.offline_signals_layout.addStretch()
-        
-        self.offline_scroll.setWidget(self.offline_signals_widget)
-        left_layout.addWidget(self.offline_scroll)
 
         sessions_group = QGroupBox("SESIONES LAPTIMER")
         sessions_layout = QVBoxLayout()
+        sessions_layout.setContentsMargins(6, 6, 6, 6)
+        sessions_layout.setSpacing(6)
 
         self.offline_session_selector = QComboBox()
         self.offline_session_selector.setStyleSheet(
             "QComboBox {background-color: #1d2735; color: #e8f0ff; border: 1px solid #426084; "
-            "border-radius: 8px; padding: 6px 10px; font-size: 10pt;}"
+            "border-radius: 0px; padding: 6px 10px; font-size: 10pt;}"
         )
-        self.offline_session_selector.addItem("Sin sesiones cargadas")
+        self.offline_session_selector.addItem("SIN SESIONES CARGADAS")
         self.offline_session_selector.currentIndexChanged.connect(self.on_offline_session_selected)
         sessions_layout.addWidget(self.offline_session_selector)
 
-        compare_row = QHBoxLayout()
-        compare_row.addWidget(QLabel("Comparar"))
-        self.offline_compare_lap_a = QComboBox()
-        self.offline_compare_lap_a.addItem("Vuelta A")
-        compare_row.addWidget(self.offline_compare_lap_a)
-        self.offline_compare_lap_b = QComboBox()
-        self.offline_compare_lap_b.addItem("Vuelta B")
-        compare_row.addWidget(self.offline_compare_lap_b)
-        self.offline_compare_btn = QPushButton("Comparar vueltas")
-        self.offline_compare_btn.setStyleSheet("background-color: #455a64; color: white; padding: 6px 10px; border-radius: 8px; font-weight: 700;")
-        self.offline_compare_btn.clicked.connect(self.compare_offline_session_laps)
-        compare_row.addWidget(self.offline_compare_btn)
-        sessions_layout.addLayout(compare_row)
+        self.offline_select_session_btn = QPushButton("SELECCIONAR SESION")
+        self.offline_select_session_btn.setStyleSheet(action_button_style("#2e7d32", font_size_pt=9))
+        self.offline_select_session_btn.clicked.connect(self.select_offline_session)
+        sessions_layout.addWidget(self.offline_select_session_btn)
 
-        self.offline_session_details = QLabel("Carga un CSV de sesiones para analizar vueltas.")
-        self.offline_session_details.setStyleSheet("color: #9fb3c8; background-color: #1b2230; border-radius: 8px; padding: 8px; font-size: 10pt;")
-        self.offline_session_details.setWordWrap(True)
-        sessions_layout.addWidget(self.offline_session_details)
+        self.offline_session_summary = QLabel("CARGA UN CSV DE SESIONES PARA ANALIZAR VUELTAS.")
+        self.offline_session_summary.setStyleSheet(
+            "color: #9fb3c8; background-color: #1b2230; border: 1px solid #3a3a3a; "
+            "border-radius: 0px; padding: 8px 10px; font-size: 10pt;"
+        )
+        self.offline_session_summary.setWordWrap(True)
+        sessions_layout.addWidget(self.offline_session_summary)
+
+        sessions_group.setLayout(sessions_layout)
+        left_layout.addWidget(sessions_group)
 
         self.offline_session_laps_table = QTableWidget(0, 4)
         self.offline_session_laps_table.setHorizontalHeaderLabels(["Vuelta", "Tiempo", "Delta", "Estado"])
@@ -957,7 +1327,7 @@ class TelemetryWindow(QMainWindow):
         self.offline_session_laps_table.setStyleSheet(
             "QTableWidget {background-color: #101722; color: #f8fafc; border: 1px solid #2f3746; "
             "gridline-color: #2f3746; font-size: 10pt;} "
-            "QHeaderView::section {background-color: #1f2937; color: #e6edf7; font-weight: 700; padding: 6px; border: 0;}"
+            "QHeaderView::section {background-color: #1f2937; color: #e6edf7; font-weight: 700; padding: 6px; border: 1px solid #2f3746;}"
         )
         session_table_header = self.offline_session_laps_table.horizontalHeader()
         session_table_header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
@@ -965,10 +1335,7 @@ class TelemetryWindow(QMainWindow):
         session_table_header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         session_table_header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.offline_session_laps_table.currentCellChanged.connect(self.on_offline_session_lap_row_changed)
-        sessions_layout.addWidget(self.offline_session_laps_table)
-
-        sessions_group.setLayout(sessions_layout)
-        left_layout.addWidget(sessions_group)
+        left_layout.addWidget(self.offline_session_laps_table, 1)
         
         # Panel derecho: gráficas (telemetría + sesiones)
         right_panel = QWidget()
@@ -977,15 +1344,15 @@ class TelemetryWindow(QMainWindow):
         self.offline_right_tabs = QTabWidget()
         self.offline_right_tabs.setStyleSheet(
             "QTabWidget::pane { border: 1px solid #2f3746; background-color: #0f141c; }"
-            "QTabBar::tab { background: #202b39; color: #9fb3c8; padding: 6px 14px; }"
-            "QTabBar::tab:selected { background: #2e3f56; color: #ffffff; border-bottom: 2px solid #00e676; }"
+            "QTabBar::tab { background: #202b39; color: #9fb3c8; padding: 6px 14px; border: 1px solid #2f3746; border-radius: 0px; }"
+            "QTabBar::tab:selected { background: #2e3f56; color: #ffffff; border-bottom: 1px solid #00e676; }"
         )
 
         telemetry_page = QWidget()
         telemetry_layout = QVBoxLayout(telemetry_page)
         telemetry_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.offline_combined_hint = QLabel("Vista combinada: telemetría y eventos laptime sincronizados por timestamp")
+        self.offline_combined_hint = QLabel("VISTA COMBINADA: TELEMETRIA Y EVENTOS LAPTIME SINCRONIZADOS POR TIMESTAMP")
         self.offline_combined_hint.setStyleSheet("color: #9fb3c8; font-size: 10pt;")
         telemetry_layout.addWidget(self.offline_combined_hint)
 
@@ -1028,6 +1395,10 @@ class TelemetryWindow(QMainWindow):
         self.offline_combined_mode_filter.addItem("Todos")
         self.offline_combined_mode_filter.currentIndexChanged.connect(self.on_offline_combined_filter_changed)
         filters_row.addWidget(self.offline_combined_mode_filter)
+        self.offline_jump_lap_btn = QPushButton("VER VUELTA")
+        self.offline_jump_lap_btn.setStyleSheet(action_button_style("#455a64", font_size_pt=9))
+        self.offline_jump_lap_btn.clicked.connect(self.show_selected_offline_combined_lap)
+        filters_row.addWidget(self.offline_jump_lap_btn)
         filters_row.addStretch()
         combined_layout.addLayout(filters_row)
 
@@ -1084,8 +1455,8 @@ class TelemetryWindow(QMainWindow):
     def setup_laptimer_ui(self):
         """Tab dedicado a LapTimer con métricas destacadas y tabla histórica."""
         layout = QVBoxLayout(self.laptimer_tab)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(12)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
 
         self.session_mode = "Skidpad"
         self.session_running = False
@@ -1101,78 +1472,108 @@ class TelemetryWindow(QMainWindow):
         self.completed_sessions = []
         self.laptimer_panel_widgets = {}
 
-        header = QLabel("Lap Timer")
-        header.setStyleSheet("color: #ffd166; font-size: 28px; font-weight: 700;")
-        layout.addWidget(header)
+        # Franja superior horizontal compacta
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(10)
 
-        subheader = QLabel("Resolución: milisegundos (ms)")
-        subheader.setStyleSheet("color: #9fb3c8; font-size: 11pt;")
-        layout.addWidget(subheader)
+        header = QLabel("LAP TIMER")
+        header.setStyleSheet("color: #ffd166; font-size: 22px; font-weight: 700;")
+        top_row.addWidget(header)
 
-        session_row = QHBoxLayout()
-        session_row.setSpacing(10)
+        subheader = QLabel("RESOLUCION: MS")
+        subheader.setStyleSheet("color: #9fb3c8; font-size: 10pt;")
+        top_row.addWidget(subheader)
 
-        mode_lbl = QLabel("Sesión")
-        mode_lbl.setStyleSheet("color: #dbe7f4; font-size: 11pt; font-weight: 700;")
-        session_row.addWidget(mode_lbl)
-
-        self.session_selector = QComboBox()
-        self.session_selector.addItems(["Skidpad", "Autocross", "Endurance"])
-        self.session_selector.setStyleSheet(
-            "QComboBox {background-color: #1d2735; color: #e8f0ff; border: 1px solid #426084; "
-            "border-radius: 8px; padding: 6px 10px; font-size: 11pt;}"
+        self.session_status_label = QLabel("ESTADO: SKIDPAD LISTO, PENDIENTE DE INICIAR")
+        self.session_status_label.setStyleSheet(
+            "color: #dbe7f4; background-color: #1b2230; border: 1px solid #426084; "
+            "border-radius: 0px; padding: 4px 8px; font-size: 10pt;"
         )
-        self.session_selector.currentTextChanged.connect(self.on_session_mode_changed)
-        session_row.addWidget(self.session_selector, 1)
+        top_row.addWidget(self.session_status_label, 1)
 
-        name_lbl = QLabel("Nombre")
-        name_lbl.setStyleSheet("color: #dbe7f4; font-size: 11pt; font-weight: 700;")
-        session_row.addWidget(name_lbl)
+        top_row.addStretch()
 
-        self.session_name_input = QLineEdit()
-        self.session_name_input.setPlaceholderText("Ej: Test neumáticos C1")
-        self.session_name_input.setStyleSheet(
-            "QLineEdit {background-color: #1d2735; color: #e8f0ff; border: 1px solid #426084; "
-            "border-radius: 8px; padding: 6px 10px; font-size: 11pt;}"
-        )
-        session_row.addWidget(self.session_name_input, 2)
-
-        self.start_session_btn = QPushButton("Iniciar prueba")
-        self.start_session_btn.setStyleSheet("background-color: #1b7a4a; color: white; padding: 8px 14px; border-radius: 8px; font-weight: 700;")
-        self.start_session_btn.clicked.connect(self.start_session)
-        session_row.addWidget(self.start_session_btn)
-
-        self.pause_session_btn = QPushButton("Pausar")
-        self.pause_session_btn.setStyleSheet("background-color: #915f00; color: white; padding: 8px 14px; border-radius: 8px; font-weight: 700;")
-        self.pause_session_btn.clicked.connect(self.toggle_pause_session)
-        self.pause_session_btn.setEnabled(False)
-        session_row.addWidget(self.pause_session_btn)
-
-        self.stop_session_btn = QPushButton("Detener")
-        self.stop_session_btn.setStyleSheet("background-color: #8f2c2c; color: white; padding: 8px 14px; border-radius: 8px; font-weight: 700;")
-        self.stop_session_btn.clicked.connect(self.stop_session)
-        self.stop_session_btn.setEnabled(False)
-        session_row.addWidget(self.stop_session_btn)
-
-        self.last_lap_btn = QPushButton(LAPTIMER_LAST_LAP_TEXT)
-        self.last_lap_btn.setStyleSheet("background-color: #5c4b00; color: white; padding: 8px 14px; border-radius: 8px; font-weight: 700;")
-        self.last_lap_btn.clicked.connect(self.arm_last_lap)
-        self.last_lap_btn.setEnabled(False)
-        session_row.addWidget(self.last_lap_btn)
-
-        layout.addLayout(session_row)
-
-        summary_row = QHBoxLayout()
-        self.laps_count_label = QLabel("Vueltas: 0")
-        self.last_lap_label = QLabel("Última: --:--.---")
-        self.total_time_label = QLabel("Tiempo total: --:--.---")
-        self.stopwatch_label = QLabel("Cronómetro: --:--.---")
+        # Resumen rápido alineado en la franja superior
+        self.laps_count_label = QLabel("VUELTAS: 0")
+        self.last_lap_label = QLabel("ULTIMA: --:--.---")
+        self.total_time_label = QLabel("TOTAL: --:--.---")
+        self.stopwatch_label = QLabel("CRONO: --:--.---")
 
         for lbl in [self.laps_count_label, self.last_lap_label, self.total_time_label, self.stopwatch_label]:
-            lbl.setStyleSheet("color: #f1f5f9; background-color: #252a35; border-radius: 8px; padding: 8px; font-size: 12pt;")
-            summary_row.addWidget(lbl)
+            lbl.setStyleSheet("color: #f1f5f9; background-color: #252a35; border: 1px solid #3a3a3a; border-radius: 0px; padding: 6px 10px; font-size: 10pt;")
+            top_row.addWidget(lbl)
 
-        layout.addLayout(summary_row)
+        layout.addLayout(top_row)
+
+        # Parte inferior: dos columnas al 50% para aprovechar pantalla
+        laptimer_splitter = QSplitter(Qt.Orientation.Horizontal)
+        laptimer_splitter.setHandleWidth(1)
+        laptimer_splitter.setChildrenCollapsible(False)
+        layout.addWidget(laptimer_splitter, 1)
+
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(6, 6, 6, 6)
+        left_layout.setSpacing(8)
+
+        session_box = QGroupBox("CONTROL DE SESION")
+        session_box_layout = QGridLayout(session_box)
+        session_box_layout.setContentsMargins(6, 6, 6, 6)
+        session_box_layout.setHorizontalSpacing(6)
+        session_box_layout.setVerticalSpacing(6)
+
+        mode_lbl = QLabel("SESION")
+        mode_lbl.setStyleSheet("color: #dbe7f4; font-size: 10pt; font-weight: 700;")
+        session_box_layout.addWidget(mode_lbl, 0, 0)
+
+        self.session_selector = QComboBox()
+        self.session_selector.addItems(["SKIDPAD", "AUTOCROSS", "ENDURANCE"])
+        self.session_selector.setStyleSheet(
+            "QComboBox {background-color: #1d2735; color: #e8f0ff; border: 1px solid #426084; "
+            "border-radius: 0px; padding: 6px 10px; font-size: 10pt;}"
+        )
+        self.session_selector.currentTextChanged.connect(self.on_session_mode_changed)
+        session_box_layout.addWidget(self.session_selector, 0, 1)
+
+        name_lbl = QLabel("NOMBRE")
+        name_lbl.setStyleSheet("color: #dbe7f4; font-size: 10pt; font-weight: 700;")
+        session_box_layout.addWidget(name_lbl, 0, 2)
+
+        self.session_name_input = QLineEdit()
+        self.session_name_input.setPlaceholderText("EJ: TEST")
+        self.session_name_input.setStyleSheet(
+            "QLineEdit {background-color: #1d2735; color: #e8f0ff; border: 1px solid #426084; "
+            "border-radius: 0px; padding: 6px 10px; font-size: 10pt;}"
+        )
+        session_box_layout.addWidget(self.session_name_input, 0, 3)
+
+        self.start_session_btn = QPushButton("INICIAR")
+        self.start_session_btn.setStyleSheet("background-color: #1b7a4a; color: white; padding: 8px 12px; border: 1px solid #3a3a3a; border-radius: 0px; font-weight: 700;")
+        self.start_session_btn.clicked.connect(self.start_session)
+        session_box_layout.addWidget(self.start_session_btn, 1, 0)
+
+        self.pause_session_btn = QPushButton("PAUSAR")
+        self.pause_session_btn.setStyleSheet("background-color: #915f00; color: white; padding: 8px 12px; border: 1px solid #3a3a3a; border-radius: 0px; font-weight: 700;")
+        self.pause_session_btn.clicked.connect(self.toggle_pause_session)
+        self.pause_session_btn.setEnabled(False)
+        session_box_layout.addWidget(self.pause_session_btn, 1, 1)
+
+        self.stop_session_btn = QPushButton("DETENER")
+        self.stop_session_btn.setStyleSheet("background-color: #8f2c2c; color: white; padding: 8px 12px; border: 1px solid #3a3a3a; border-radius: 0px; font-weight: 700;")
+        self.stop_session_btn.clicked.connect(self.stop_session)
+        self.stop_session_btn.setEnabled(False)
+        session_box_layout.addWidget(self.stop_session_btn, 1, 2)
+
+        self.last_lap_btn = QPushButton(LAPTIMER_LAST_LAP_TEXT)
+        self.last_lap_btn.setStyleSheet("background-color: #5c4b00; color: white; padding: 8px 12px; border: 1px solid #3a3a3a; border-radius: 0px; font-weight: 700;")
+        self.last_lap_btn.clicked.connect(self.arm_last_lap)
+        self.last_lap_btn.setEnabled(False)
+        session_box_layout.addWidget(self.last_lap_btn, 1, 3)
+
+        session_box_layout.setColumnStretch(1, 1)
+        session_box_layout.setColumnStretch(3, 2)
+        left_layout.addWidget(session_box)
 
         self.mode_stack = QStackedWidget()
 
@@ -1195,16 +1596,22 @@ class TelemetryWindow(QMainWindow):
         self.mode_stack.addWidget(self.skidpad_panel)
         self.mode_stack.addWidget(self.autocross_panel)
         self.mode_stack.addWidget(self.endurance_panel)
+        left_layout.addWidget(self.mode_stack, 1)
 
-        layout.addWidget(self.mode_stack)
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(6, 6, 6, 6)
+        right_layout.setSpacing(8)
+
         self.laptimer_history_table = QTableWidget(0, 7)
-        self.laptimer_history_table.setHorizontalHeaderLabels(["#", "Nombre", "Modo", "Inicio", "Fin", "Vueltas", "Resumen"])
+        self.laptimer_history_table.setHorizontalHeaderLabels(["#", "NOMBRE", "MODO", "INICIO", "FIN", "VUELTAS", "RESUMEN"])
         self.laptimer_history_table.verticalHeader().setVisible(False)
         self.laptimer_history_table.setAlternatingRowColors(True)
+        self.laptimer_history_table.setMinimumHeight(230)
         self.laptimer_history_table.setStyleSheet(
             "QTableWidget {background-color: #11151c; color: #f8fafc; border: 1px solid #2f3746; "
             "gridline-color: #2f3746; font-size: 10pt;} "
-            "QHeaderView::section {background-color: #1f2937; color: #e6edf7; font-weight: 700; padding: 6px; border: 0;}"
+            "QHeaderView::section {background-color: #1f2937; color: #e6edf7; font-weight: 700; padding: 6px; border: 1px solid #2f3746;}"
         )
 
         history_header = self.laptimer_history_table.horizontalHeader()
@@ -1216,39 +1623,41 @@ class TelemetryWindow(QMainWindow):
         history_header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
         history_header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
 
-        history_box = QGroupBox("Historial de Sesiones")
+        history_box = QGroupBox("HISTORIAL DE SESIONES")
         history_layout = QVBoxLayout(history_box)
+        history_layout.setContentsMargins(6, 6, 6, 6)
+        history_layout.setSpacing(8)
 
         history_controls = QHBoxLayout()
-        history_controls.addWidget(QLabel("Sesión guardada:"))
+        history_controls.setContentsMargins(0, 0, 0, 0)
+        history_controls.setSpacing(6)
+        history_controls.addWidget(QLabel("SESION GUARDADA:"))
 
         self.saved_session_selector = QComboBox()
         self.saved_session_selector.setStyleSheet(
             "QComboBox {background-color: #1d2735; color: #e8f0ff; border: 1px solid #426084; "
-            "border-radius: 8px; padding: 6px 10px; font-size: 10pt;}"
+            "border-radius: 0px; padding: 6px 10px; font-size: 10pt;}"
         )
         self.saved_session_selector.currentIndexChanged.connect(self.on_saved_session_selected)
         history_controls.addWidget(self.saved_session_selector, 1)
 
-        self.export_sessions_btn = QPushButton("Exportar sesiones CSV")
-        self.export_sessions_btn.setStyleSheet("background-color: #1976d2; color: white; padding: 8px 12px; border-radius: 8px; font-weight: 700;")
-        self.export_sessions_btn.clicked.connect(self.export_sessions_csv)
-        history_controls.addWidget(self.export_sessions_btn)
+
 
         history_layout.addLayout(history_controls)
 
-        self.saved_session_details = QLabel("Sin sesiones guardadas")
-        self.saved_session_details.setStyleSheet("color: #9fb3c8; background-color: #1b2230; border-radius: 8px; padding: 8px; font-size: 10pt;")
+        self.saved_session_details = QLabel("SIN SESIONES GUARDADAS")
+        self.saved_session_details.setStyleSheet("color: #9fb3c8; background-color: #1b2230; border: 1px solid #3a3a3a; border-radius: 0px; padding: 8px 10px; font-size: 10pt;")
         history_layout.addWidget(self.saved_session_details)
 
         self.saved_session_laps_table = QTableWidget(0, 4)
         self.saved_session_laps_table.setHorizontalHeaderLabels(["Vuelta", "Tiempo", "Delta", "Estado"])
         self.saved_session_laps_table.verticalHeader().setVisible(False)
         self.saved_session_laps_table.setAlternatingRowColors(True)
+        self.saved_session_laps_table.setMinimumHeight(180)
         self.saved_session_laps_table.setStyleSheet(
             "QTableWidget {background-color: #101722; color: #f8fafc; border: 1px solid #2f3746; "
             "gridline-color: #2f3746; font-size: 10pt;} "
-            "QHeaderView::section {background-color: #1f2937; color: #e6edf7; font-weight: 700; padding: 6px; border: 0;}"
+            "QHeaderView::section {background-color: #1f2937; color: #e6edf7; font-weight: 700; padding: 6px; border: 1px solid #2f3746;}"
         )
         laps_header = self.saved_session_laps_table.horizontalHeader()
         laps_header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
@@ -1257,8 +1666,14 @@ class TelemetryWindow(QMainWindow):
         laps_header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         history_layout.addWidget(self.saved_session_laps_table)
 
-        history_layout.addWidget(self.laptimer_history_table)
-        layout.addWidget(history_box)
+        history_layout.addWidget(self.laptimer_history_table, 1)
+        right_layout.addWidget(history_box, 1)
+
+        laptimer_splitter.addWidget(left_panel)
+        laptimer_splitter.addWidget(right_panel)
+        laptimer_splitter.setStretchFactor(0, 1)
+        laptimer_splitter.setStretchFactor(1, 1)
+        laptimer_splitter.setSizes([700, 700])
 
         self.laptimer_session_counter = 0
         self.session_summary_popup = None
@@ -1269,25 +1684,26 @@ class TelemetryWindow(QMainWindow):
     def create_laptimer_mode_panel(self, title, subtitle, layout_variant="autocross"):
         panel = QWidget()
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         title_label = QLabel(title)
-        title_label.setStyleSheet("color: #ffd166; font-size: 18px; font-weight: 800;")
+        title_label.setStyleSheet("color: #ffd166; font-size: 14px; font-weight: 800;")
         subtitle_label = QLabel(subtitle)
-        subtitle_label.setStyleSheet("color: #9fb3c8; font-size: 10pt;")
+        subtitle_label.setStyleSheet("color: #9fb3c8; font-size: 9pt;")
 
         layout.addWidget(title_label)
         layout.addWidget(subtitle_label)
 
         mini_row = QHBoxLayout()
+        mini_row.setSpacing(6)
 
         session_time_label = QLabel("00:00.000")
         session_time_label.setObjectName(f"{title}_session_time")
         session_time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         session_time_label.setStyleSheet(
             "background-color: #0f172a; color: #7dd3fc; border: 2px solid #2563eb; "
-            "border-radius: 14px; font-size: 34px; font-weight: 800; padding: 14px;"
+            "border-radius: 0px; font-size: 24px; font-weight: 800; padding: 12px 14px;"
         )
 
         total_time_card = QLabel("--:--.---")
@@ -1295,7 +1711,7 @@ class TelemetryWindow(QMainWindow):
         total_time_card.setAlignment(Qt.AlignmentFlag.AlignCenter)
         total_time_card.setStyleSheet(
             "background-color: #1a2433; color: #f9fafb; border: 2px solid #44546a; "
-            "border-radius: 14px; font-size: 28px; font-weight: 700; padding: 14px;"
+            "border-radius: 0px; font-size: 18px; font-weight: 700; padding: 10px 12px;"
         )
 
         best_time_card = QLabel("--:--.---")
@@ -1303,7 +1719,7 @@ class TelemetryWindow(QMainWindow):
         best_time_card.setAlignment(Qt.AlignmentFlag.AlignCenter)
         best_time_card.setStyleSheet(
             "background-color: #072b1f; color: #39ff9b; border: 2px solid #1aff8c; "
-            "border-radius: 14px; font-size: 28px; font-weight: 800; padding: 14px;"
+            "border-radius: 0px; font-size: 18px; font-weight: 800; padding: 10px 12px;"
         )
 
         avg_time_card = QLabel("--:--.---")
@@ -1311,22 +1727,34 @@ class TelemetryWindow(QMainWindow):
         avg_time_card.setAlignment(Qt.AlignmentFlag.AlignCenter)
         avg_time_card.setStyleSheet(
             "background-color: #1f2233; color: #8fc1ff; border: 2px solid #4f7ddb; "
-            "border-radius: 14px; font-size: 28px; font-weight: 700; padding: 14px;"
+            "border-radius: 0px; font-size: 18px; font-weight: 700; padding: 10px 12px;"
         )
 
-        mini_row.addWidget(session_time_label, 2)
+        def pack_with_label(widget, text):
+            container = QWidget()
+            vbox = QVBoxLayout(container)
+            vbox.setContentsMargins(0, 0, 0, 0)
+            vbox.setSpacing(2)
+            lbl = QLabel(text)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setStyleSheet("color: #8fa0b5; font-size: 9pt; font-weight: bold;")
+            vbox.addWidget(lbl)
+            vbox.addWidget(widget)
+            return container
+
+        mini_row.addWidget(pack_with_label(session_time_label, "TIEMPO EN VIVO"), 2)
         if layout_variant == "skidpad":
-            mini_row.addWidget(best_time_card, 1)
-            mini_row.addWidget(avg_time_card, 1)
-            mini_row.addWidget(total_time_card, 1)
+            mini_row.addWidget(pack_with_label(best_time_card, "MEJOR VUELTA"), 1)
+            mini_row.addWidget(pack_with_label(avg_time_card, "MEDIA VUELTAS"), 1)
+            mini_row.addWidget(pack_with_label(total_time_card, "SKIDPAD FS (MEDIA)"), 1)
         elif layout_variant == "endurance":
-            mini_row.addWidget(total_time_card, 1)
-            mini_row.addWidget(avg_time_card, 1)
-            mini_row.addWidget(best_time_card, 1)
+            mini_row.addWidget(pack_with_label(total_time_card, "TIEMPO TOTAL"), 1)
+            mini_row.addWidget(pack_with_label(avg_time_card, "TIEMPO MEDIO"), 1)
+            mini_row.addWidget(pack_with_label(best_time_card, "MEJOR VUELTA"), 1)
         else:
-            mini_row.addWidget(total_time_card, 1)
-            mini_row.addWidget(best_time_card, 1)
-            mini_row.addWidget(avg_time_card, 1)
+            mini_row.addWidget(pack_with_label(total_time_card, "TIEMPO TOTAL"), 1)
+            mini_row.addWidget(pack_with_label(best_time_card, "MEJOR VUELTA"), 1)
+            mini_row.addWidget(pack_with_label(avg_time_card, "TIEMPO MEDIO"), 1)
 
         layout.addLayout(mini_row)
 
@@ -1335,23 +1763,22 @@ class TelemetryWindow(QMainWindow):
         session_table.setHorizontalHeaderLabels(["Vuelta", "Tiempo", "Delta", "Estado"])
         session_table.verticalHeader().setVisible(False)
         session_table.setAlternatingRowColors(True)
+        session_table.setMinimumHeight(240)
         session_table.setStyleSheet(
             "QTableWidget {background-color: #161a22; color: #f8fafc; border: 1px solid #2f3746; "
-            "gridline-color: #2f3746; font-size: 11pt;} "
-            "QHeaderView::section {background-color: #222b38; color: #e6edf7; font-weight: 700; padding: 6px; border: 0;}"
+            "gridline-color: #2f3746; font-size: 10pt;} "
+            "QHeaderView::section {background-color: #222b38; color: #e6edf7; font-weight: 700; padding: 6px 8px; border: 1px solid #2f3746;}"
         )
         panel_header = session_table.horizontalHeader()
         panel_header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         panel_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         panel_header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         panel_header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        layout.addWidget(session_table)
 
         session_table_footer = QLabel(LAPTIMER_EMPTY_FOOTER_TEXT)
         session_table_footer.setObjectName(f"{title}_footer")
-        session_table_footer.setStyleSheet("color: #94a3b8; font-size: 10pt;")
-        layout.addWidget(session_table_footer)
-
+        session_table_footer.setStyleSheet("color: #94a3b8; font-size: 9pt;")
+        
         self.laptimer_panel_widgets[title] = {
             "session_time": session_time_label,
             "total_time": total_time_card,
@@ -1359,15 +1786,31 @@ class TelemetryWindow(QMainWindow):
             "avg_time": avg_time_card,
             "table": session_table,
             "footer": session_table_footer,
+            "track_widget": None
         }
+
+        # Adaptar layout del widget de circuito en Skidpad
+        if layout_variant == "skidpad":
+            track_widget = SkidpadTrackWidget()
+            self.laptimer_panel_widgets[title]["track_widget"] = track_widget
+            layout.addWidget(track_widget, 1)
+            # No agregamos la tabla al layout en skidpad
+        else:
+            layout.addWidget(session_table, 1)
+            layout.addWidget(session_table_footer)
 
         return panel
 
-    def create_data_group(self, title, signals):
+    def create_data_group(self, title, signals, font_size=10, prominent=False):
         group = QGroupBox(title)
         layout = QGridLayout()
         layout.setColumnStretch(2, 1)
         layout.setSpacing(3)
+        
+        # Si es prominente (MOTOR), aumentar padding y espaciado
+        if prominent:
+            layout.setContentsMargins(8, 8, 8, 8)
+            layout.setSpacing(6)
         
         row = 0
         color_idx = len(self.color_assignment)  # Continuar desde el último color asignado
@@ -1386,19 +1829,21 @@ class TelemetryWindow(QMainWindow):
 
             # 2. Nombre Señal
             lbl_name = QLabel(label_text)
-            lbl_name.setStyleSheet("color: #aaa; font-size: 10pt;")
+            name_font_size = font_size if prominent else 10
+            lbl_name.setStyleSheet(f"color: #aaa; font-size: {name_font_size}pt;")
             layout.addWidget(lbl_name, row, 1)
             
             # 3. Valor Señal
             lbl_val = QLabel("---")
             lbl_val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            lbl_val.setFont(QFont("Segoe UI", 11))
+            val_font_size = font_size + 1 if prominent else 11
+            lbl_val.setFont(QFont("Segoe UI", val_font_size, QFont.Weight.Bold if prominent else QFont.Weight.Normal))
             lbl_val.setStyleSheet("color: #555;")
             layout.addWidget(lbl_val, row, 2)
             
             # 4. Unidad
             lbl_unit = QLabel(unit)
-            lbl_unit.setStyleSheet("color: #666; font-size: 9pt;")
+            lbl_unit.setStyleSheet(f"color: #666; font-size: {font_size - 1}pt;")
             layout.addWidget(lbl_unit, row, 3)
             
             self.ui_labels[key] = lbl_val 
@@ -1465,7 +1910,7 @@ class TelemetryWindow(QMainWindow):
             return
         
         # Recopilar valores de todas las gráficas activas
-        lines = [f"⏱ Tiempo: {x_pos:.2f}s", "="*30]
+        lines = [f"TIEMPO: {x_pos:.2f}s", "="*30]
         
         for signal_name, plot_widget in sorted(self.plot_widgets.items()):
             value = plot_widget.get_value_at_time(x_pos)
@@ -1494,18 +1939,33 @@ class TelemetryWindow(QMainWindow):
         self.popup_enabled = not self.popup_enabled
         
         if self.popup_enabled:
-            self.popup_toggle_btn.setText("💬 Popup: ON")
-            self.popup_toggle_btn.setStyleSheet("background-color: #00e676; color: white; padding: 5px 15px; border-radius: 3px; font-weight: bold;")
+            self.popup_toggle_btn.setText("POPUP ON")
+            self.popup_toggle_btn.setStyleSheet(popup_button_style(True))
+            self.popup_toggle_btn.setToolTip("POPUP ON (F2)")
             print("[UI] Popup de valores activado (F2)")
         else:
-            self.popup_toggle_btn.setText("💬 Popup: OFF")
-            self.popup_toggle_btn.setStyleSheet("background-color: #555; color: #aaa; padding: 5px 15px; border-radius: 3px; font-weight: bold;")
+            self.popup_toggle_btn.setText("POPUP OFF")
+            self.popup_toggle_btn.setStyleSheet(popup_button_style(False))
+            self.popup_toggle_btn.setToolTip("POPUP OFF (F2)")
             self.hide_value_popup()
             print("[UI] Popup de valores desactivado (F2)")
     
+    def switch_page(self, page_index):
+        """Cambia la página activa y actualiza estilo navbar"""
+        self.pages_stack.setCurrentIndex(page_index)
+        
+        # Restablecer todos los botones a estado inactivo
+        for btn in [self.nav_btn_dashboard, self.nav_btn_todo, self.nav_btn_laptimer, self.nav_btn_monitor, self.nav_btn_offline]:
+            btn.setStyleSheet(nav_button_style(False))
+        
+        # Activar el botón seleccionado
+        buttons = [self.nav_btn_dashboard, self.nav_btn_todo, self.nav_btn_laptimer, self.nav_btn_monitor, self.nav_btn_offline]
+        if page_index < len(buttons):
+            buttons[page_index].setStyleSheet(nav_button_style(True))
+    
     def activate_default_graphs(self):
-        """Activa las gráficas por defecto: ECT, tp, batt_volt, engine_rpm"""
-        default_signals = ['ect', 'tp', 'batt_volt', 'engine_rpm']
+        """Activa gráficas por defecto basadas en las señales del DBC."""
+        default_signals = [sig["key"] for sig in self.signals_by_group.get("MOTOR", [])[:4]]
         
         for signal in default_signals:
             if signal in self.checkboxes:
@@ -1532,16 +1992,21 @@ class TelemetryWindow(QMainWindow):
         widgets["total_time"].setText("--:--.---")
         widgets["best_time"].setText("--:--.---")
         widgets["avg_time"].setText("--:--.---")
-        self.laps_count_label.setText("Vueltas: 0")
-        self.last_lap_label.setText("Última: --:--.---")
-        self.total_time_label.setText("Tiempo total: --:--.---")
-        self.stopwatch_label.setText("Cronómetro: --:--.---")
+        self.laps_count_label.setText("VUELTAS: 0")
+        self.last_lap_label.setText("ULTIMA: --:--.---")
+        self.total_time_label.setText("TOTAL: --:--.---")
+        self.stopwatch_label.setText("CRONO: --:--.---")
 
     def on_session_mode_changed(self, mode):
-        self.session_mode = mode
+        mode_map = {
+            "SKIDPAD": "Skidpad",
+            "AUTOCROSS": "Autocross",
+            "ENDURANCE": "Endurance",
+        }
+        self.session_mode = mode_map.get(mode.upper(), mode)
         self.update_session_interface()
         self.stop_session(clear_table=True, finalize=False)
-        self.session_status_label.setText(f"Estado: {mode} listo, pendiente de iniciar")
+        self.session_status_label.setText(f"ESTADO: {self.session_mode.upper()} LISTO, PENDIENTE DE INICIAR")
 
     def start_session(self):
         if self.session_running and self.session_paused:
@@ -1567,17 +2032,17 @@ class TelemetryWindow(QMainWindow):
         self.pause_session_btn.setEnabled(True)
         self.stop_session_btn.setEnabled(True)
         self.last_lap_btn.setEnabled(True)
-        self.pause_session_btn.setText("Pausar")
+        self.pause_session_btn.setText("PAUSAR")
         self.last_lap_btn.setText(LAPTIMER_LAST_LAP_TEXT)
-        self.session_status_label.setText(f"Estado: {self.session_mode} en curso")
+        self.session_status_label.setText(f"ESTADO: {self.session_mode.upper()} EN CURSO")
 
     def arm_last_lap(self):
         if not self.session_running or self.session_paused:
             return
         self.session_last_lap_armed = True
-        self.last_lap_btn.setText("Última vuelta: armada")
-        self.last_lap_btn.setStyleSheet("background-color: #9a5e00; color: white; padding: 8px 14px; border-radius: 8px; font-weight: 700;")
-        self.session_status_label.setText(f"Estado: {self.session_mode} - última vuelta armada")
+        self.last_lap_btn.setText("ULTIMA VUELTA: ARMADA")
+        self.last_lap_btn.setStyleSheet("background-color: #9a5e00; color: white; padding: 8px 14px; border: 1px solid #3a3a3a; border-radius: 0px; font-weight: 700;")
+        self.session_status_label.setText(f"ESTADO: {self.session_mode.upper()} - ULTIMA VUELTA ARMADA")
 
     def toggle_pause_session(self):
         if not self.session_running:
@@ -1587,14 +2052,14 @@ class TelemetryWindow(QMainWindow):
             elapsed_now = max(0.0, time.time() - self.session_started_at)
             self.session_elapsed_before_pause += elapsed_now
             self.session_paused = True
-            self.pause_session_btn.setText("Reanudar")
-            self.session_status_label.setText(f"Estado: {self.session_mode} en pausa")
+            self.pause_session_btn.setText("REANUDAR")
+            self.session_status_label.setText(f"ESTADO: {self.session_mode.upper()} EN PAUSA")
             return
 
         self.session_paused = False
         self.session_started_at = time.time()
-        self.pause_session_btn.setText("Pausar")
-        self.session_status_label.setText(f"Estado: {self.session_mode} en curso")
+        self.pause_session_btn.setText("PAUSAR")
+        self.session_status_label.setText(f"ESTADO: {self.session_mode.upper()} EN CURSO")
 
     def stop_session(self, clear_table=False, finalize=True):
         if finalize and (self.session_running or self.session_laps or self.session_first_lt_ts is not None):
@@ -1603,12 +2068,14 @@ class TelemetryWindow(QMainWindow):
 
         self.session_running = False
         self.session_paused = False
-        self.session_elapsed_before_pause = 0.0
-        self.session_started_at = None
-        self.session_started_wallclock = None
-        self.session_first_lt_ts = None
-        self.session_last_lt_ts = None
-        self.session_laps = []
+        
+        if clear_table:
+            self.session_elapsed_before_pause = 0.0
+            self.session_started_at = None
+            self.session_started_wallclock = None
+            self.session_first_lt_ts = None
+            self.session_last_lt_ts = None
+            self.session_laps = []
 
         _, ts_values = self.data_store.get_signal_data('laptimer_timestamp_s')
         self.session_lt_cursor = len(ts_values)
@@ -1616,14 +2083,14 @@ class TelemetryWindow(QMainWindow):
         self.pause_session_btn.setEnabled(False)
         self.stop_session_btn.setEnabled(False)
         self.last_lap_btn.setEnabled(False)
-        self.pause_session_btn.setText("Pausar")
+        self.pause_session_btn.setText("PAUSAR")
         self.last_lap_btn.setText(LAPTIMER_LAST_LAP_TEXT)
-        self.last_lap_btn.setStyleSheet("background-color: #5c4b00; color: white; padding: 8px 14px; border-radius: 8px; font-weight: 700;")
+        self.last_lap_btn.setStyleSheet("background-color: #5c4b00; color: white; padding: 8px 14px; border: 1px solid #3a3a3a; border-radius: 0px; font-weight: 700;")
 
         if clear_table:
             self.reset_laptimer_view()
 
-        self.session_status_label.setText(f"Estado: {self.session_mode} detenido")
+        self.session_status_label.setText(f"ESTADO: {self.session_mode.upper()} DETENIDO")
 
     def format_lap_time(self, seconds):
         if seconds is None:
@@ -1665,7 +2132,7 @@ class TelemetryWindow(QMainWindow):
             self.session_last_lt_ts = ts
             self.session_laps.append(lap_s)
 
-            if self.session_last_lap_armed:
+            if self.session_last_lap_armed or (self.session_mode.upper() == "SKIDPAD" and len(self.session_laps) >= 4):
                 should_finalize = True
                 break
 
@@ -1673,16 +2140,52 @@ class TelemetryWindow(QMainWindow):
 
     def update_laptimer_panel_values(self, widgets, stopwatch_s):
         widgets["session_time"].setText(self.format_lap_time(stopwatch_s))
-        widgets["total_time"].setText(self.format_lap_time(stopwatch_s))
-        self.stopwatch_label.setText(f"Cronómetro: {self.format_lap_time(stopwatch_s)}")
-        self.total_time_label.setText(f"Tiempo total: {self.format_lap_time(stopwatch_s)}")
+        
+        # Si es Skidpad FS válido, fijar el total con su nota oficial, sino el stopwatch
+        if self.session_mode.upper() == "SKIDPAD" and len(self.session_laps) == 4:
+            skidpad_avg = (min(self.session_laps[0:2]) + min(self.session_laps[2:4])) / 2.0
+            widgets["total_time"].setText(self.format_lap_time(skidpad_avg))
+            self.total_time_label.setText(f"TOTAL: {self.format_lap_time(skidpad_avg)}")
+        else:
+            widgets["total_time"].setText(self.format_lap_time(stopwatch_s))
+            self.total_time_label.setText(f"TOTAL: {self.format_lap_time(stopwatch_s)}")
+            
+        self.stopwatch_label.setText(f"CRONO: {self.format_lap_time(stopwatch_s)}")
+
+        # Actualizar visualmente el circuito de Skidpad en vivo
+        if self.session_mode.upper() == "SKIDPAD" and "track_widget" in widgets and widgets["track_widget"]:
+            track_widget = widgets["track_widget"]
+            r1 = self.session_laps[0] if len(self.session_laps) > 0 else 0.0
+            r2 = self.session_laps[1] if len(self.session_laps) > 1 else 0.0
+            l1 = self.session_laps[2] if len(self.session_laps) > 2 else 0.0
+            l2 = self.session_laps[3] if len(self.session_laps) > 3 else 0.0
+            
+            active_section = len(self.session_laps) + 1
+            if not self.session_running or self.session_paused:
+                active_section = 0
+            elif active_section > 4:
+                active_section = 0
+                
+            # Asignar tiempo en vivo a la sección activa
+            if active_section > 0 and self.session_started_at is not None:
+                live_lap_time = max(0.0, stopwatch_s - sum(self.session_laps))
+                if active_section == 1:
+                    r1 = live_lap_time
+                elif active_section == 2:
+                    r2 = live_lap_time
+                elif active_section == 3:
+                    l1 = live_lap_time
+                elif active_section == 4:
+                    l2 = live_lap_time
+                
+            track_widget.update_times(r1, r2, l1, l2, active_section)
 
     def refresh_laptimer_statistics(self, widgets):
         if not self.session_laps:
             widgets["best_time"].setText("--:--.---")
             widgets["avg_time"].setText("--:--.---")
-            self.laps_count_label.setText("Vueltas: 0")
-            self.last_lap_label.setText("Última: --:--.---")
+            self.laps_count_label.setText("VUELTAS: 0")
+            self.last_lap_label.setText("ULTIMA: --:--.---")
             widgets["footer"].setText(LAPTIMER_EMPTY_FOOTER_TEXT)
             widgets["table"].setRowCount(0)
             return
@@ -1693,9 +2196,9 @@ class TelemetryWindow(QMainWindow):
 
         widgets["best_time"].setText(self.format_lap_time(best))
         widgets["avg_time"].setText(self.format_lap_time(avg))
-        self.last_lap_label.setText(f"Última: {self.format_lap_time(last_lap)}")
-        self.laps_count_label.setText(f"Vueltas: {len(self.session_laps)}")
-        widgets["footer"].setText(f"{len(self.session_laps)} vueltas registradas")
+        self.last_lap_label.setText(f"ULTIMA: {self.format_lap_time(last_lap)}")
+        self.laps_count_label.setText(f"VUELTAS: {len(self.session_laps)}")
+        widgets["footer"].setText(f"{len(self.session_laps)} VUELTAS REGISTRADAS")
 
         table = widgets["table"]
         table.setRowCount(len(self.session_laps))
@@ -1730,7 +2233,7 @@ class TelemetryWindow(QMainWindow):
         table.scrollToBottom()
 
     def get_session_interface_index(self):
-        return {"Skidpad": 0, "Autocross": 1, "Endurance": 2}.get(self.session_mode, 0)
+        return {"SKIDPAD": 0, "AUTOCROSS": 1, "ENDURANCE": 2}.get(self.session_mode.upper(), 0)
 
     def update_session_interface(self):
         self.mode_stack.setCurrentIndex(self.get_session_interface_index())
@@ -1751,6 +2254,15 @@ class TelemetryWindow(QMainWindow):
         avg = (sum(self.session_laps) / len(self.session_laps)) if self.session_laps else None
         last_lap = self.session_laps[-1] if self.session_laps else None
         total_time = stopwatch_s
+        
+        skidpad_time_str = None
+        if self.session_mode.upper() == "SKIDPAD" and len(self.session_laps) == 4:
+            best_right = min(self.session_laps[0:2])
+            best_left = min(self.session_laps[2:4])
+            skidpad_avg = (best_right + best_left) / 2.0
+            skidpad_time_str = self.format_lap_time(skidpad_avg)
+            total_time = skidpad_avg
+
         session_name = self.session_name_input.text().strip()
         if not session_name:
             session_name = f"{self.session_mode}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -1785,18 +2297,19 @@ class TelemetryWindow(QMainWindow):
 
         return {
             "name": session_name,
-            "mode": self.session_mode,
+            "mode": self.session_mode.upper(),
             "laps": len(self.session_laps),
             "started_at": started_at,
             "ended_at": ended_at,
-            "total_time": self.format_lap_time(total_time),
-            "stopwatch": self.format_lap_time(total_time),
+            "total_time": self.format_lap_time(total_time) if not skidpad_time_str else skidpad_time_str,
+            "stopwatch": self.format_lap_time(stopwatch_s),
             "best": self.format_lap_time(best),
             "avg": self.format_lap_time(avg),
             "last": self.format_lap_time(last_lap),
+            "skidpad_time": skidpad_time_str,
             "consistency_ms": f"{consistency_ms:.1f}",
             "laps_table": laps_table,
-            "resume": f"{session_name} | {self.session_mode} | {len(self.session_laps)} vueltas | {self.format_lap_time(total_time)}",
+            "resume": f"{session_name} | {self.session_mode.upper()} | {len(self.session_laps)} VUELTAS | {(skidpad_time_str if skidpad_time_str else self.format_lap_time(total_time))}",
         }
 
     def append_session_history(self, summary):
@@ -1822,46 +2335,66 @@ class TelemetryWindow(QMainWindow):
 
     def show_session_popup(self, summary):
         msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("Sesión finalizada")
-        msg_box.setText(f"{summary['name']} completada")
-        msg_box.setInformativeText(
-            f"Modo: {summary['mode']}\n"
-            f"Vueltas: {summary['laps']}\n"
-            f"Tiempo total: {summary['total_time']}\n"
-            f"Cronómetro: {summary['stopwatch']}\n"
-            f"Mejor: {summary['best']}\n"
-            f"Media: {summary['avg']}\n"
-            f"Consistencia: {summary['consistency_ms']} ms"
-        )
+        msg_box.setWindowTitle("SESION FINALIZADA")
+        msg_box.setText(f"{summary['name'].upper()} COMPLETADA")
+        
+        if summary['mode'] == 'SKIDPAD' and summary.get('skidpad_time'):
+            msg_box.setInformativeText(
+                f"MODO: {summary['mode']}\n"
+                f"TIEMPO SKIDPAD (FS): {summary['skidpad_time']}\n"
+                f"Media de la mejor V Derecha (1-2) y mejor V Izquierda (3-4)"
+            )
+        else:
+            msg_box.setInformativeText(
+                f"MODO: {summary['mode']}\n"
+                f"VUELTAS: {summary['laps']}\n"
+                f"TOTAL: {summary['total_time']}\n"
+                f"CRONO: {summary['stopwatch']}\n"
+                f"MEJOR: {summary['best']}\n"
+                f"MEDIA: {summary['avg']}\n"
+                f"CONSISTENCIA: {summary['consistency_ms']} ms"
+            )
+            
         msg_box.setStyleSheet(
             "QMessageBox { background-color: #161a22; }"
             "QLabel { color: #f8fafc; font-family: 'Segoe UI'; font-size: 11pt; }"
-            "QPushButton { background-color: #1d2735; color: #e8f0ff; border: 1px solid #426084; border-radius: 8px; padding: 6px 12px; }"
+            "QPushButton { background-color: #1d2735; color: #e8f0ff; border: 1px solid #426084; border-radius: 0px; padding: 6px 12px; }"
         )
         msg_box.exec()
 
     def update_saved_session_selector(self):
         self.saved_session_selector.blockSignals(True)
         self.saved_session_selector.clear()
-        self.saved_session_selector.addItem("Selecciona sesión...")
+        self.saved_session_selector.addItem("SELECCIONA SESION...")
         for idx, summary in enumerate(self.completed_sessions, start=1):
             self.saved_session_selector.addItem(f"{idx}. {summary['name']} ({summary['mode']})")
         self.saved_session_selector.blockSignals(False)
 
     def on_saved_session_selected(self, index):
         if index <= 0 or index - 1 >= len(self.completed_sessions):
-            self.saved_session_details.setText("Sin sesiones seleccionadas")
+            self.saved_session_details.setText("SIN SESIONES SELECCIONADAS")
             self.saved_session_laps_table.setRowCount(0)
             return
 
         summary = self.completed_sessions[index - 1]
-        self.saved_session_details.setText(
-            f"Nombre: {summary['name']}\n"
-            f"Modo: {summary['mode']}\n"
-            f"Inicio: {summary['started_at']} | Fin: {summary['ended_at']}\n"
-            f"Vueltas: {summary['laps']} | Total: {summary['total_time']}\n"
-            f"Mejor: {summary['best']} | Media: {summary['avg']} | Consistencia: {summary['consistency_ms']} ms"
-        )
+        
+        if summary.get('mode') == 'SKIDPAD' and summary.get('skidpad_time'):
+            self.saved_session_details.setText(
+                f"<span style='color:#ffd166; font-size:14pt;'><b>SKIDPAD FINAL: {summary['skidpad_time']}</b></span><br/>"
+                f"<span style='color:#a0a0a0;'>NOMBRE: {summary['name']} | INICIO: {summary['started_at']}</span><br/>"
+                f"<span style='color:#a0a0a0;'>TIEMPOS: V1 Der: {summary['laps_table'][0]['lap_time_fmt']} | V2 Der: {summary['laps_table'][1]['lap_time_fmt']} | "
+                f"V1 Izq: {summary['laps_table'][2]['lap_time_fmt']} | V2 Izq: {summary['laps_table'][3]['lap_time_fmt']}</span>"
+            )
+            self.saved_session_details.setTextFormat(Qt.TextFormat.RichText)
+        else:
+            self.saved_session_details.setTextFormat(Qt.TextFormat.PlainText)
+            self.saved_session_details.setText(
+                f"NOMBRE: {summary['name']}\n"
+                f"MODO: {summary['mode']}\n"
+                f"INICIO: {summary['started_at']} | FIN: {summary['ended_at']}\n"
+                f"VUELTAS: {summary['laps']} | TOTAL: {summary['total_time']}\n"
+                f"MEJOR: {summary['best']} | MEDIA: {summary['avg']} | CONSISTENCIA: {summary['consistency_ms']} ms"
+            )
 
         laps_table = summary.get("laps_table", [])
         self.saved_session_laps_table.setRowCount(len(laps_table))
@@ -1874,8 +2407,8 @@ class TelemetryWindow(QMainWindow):
     def export_sessions_csv(self):
         QMessageBox.information(
             self,
-            "Exportación unificada",
-            "Se usará un único CSV combinado (telemetría + laptime sincronizados)."
+            "EXPORTACION UNIFICADA",
+            "SE USARA UN UNICO CSV COMBINADO DE TELEMETRIA Y LAPTIME SINCRONIZADOS."
         )
         self.export_to_csv()
 
@@ -1886,6 +2419,8 @@ class TelemetryWindow(QMainWindow):
         elapsed_now = self.session_elapsed_before_pause
         if self.session_running and not self.session_paused and self.session_started_at is not None:
             elapsed_now += max(0.0, time.time() - self.session_started_at)
+            
+        self.session_elapsed_before_pause = elapsed_now
 
         summary = self.build_laptimer_summary(elapsed_now)
         self.append_session_history(summary)
@@ -2038,12 +2573,12 @@ class TelemetryWindow(QMainWindow):
 
             QMessageBox.information(
                 self,
-                "Exportación Exitosa",
-                f"✅ Exportado CSV combinado\n\nArchivo: {os.path.basename(filename)}"
+                "EXPORTACION EXITOSA",
+                f"EXPORTADO CSV COMBINADO\n\nARCHIVO: {os.path.basename(filename)}"
             )
             print(f"[Export] CSV combinado -> {filename}")
         except Exception as exc:
-            QMessageBox.critical(self, "Error de Exportación", f"❌ {exc}")
+            QMessageBox.critical(self, "ERROR DE EXPORTACION", f"{exc}")
             print(f"[Export] ERROR combinado: {exc}")
 
     def parse_unified_laptime_rows_from_csv(self, filename):
@@ -2085,6 +2620,81 @@ class TelemetryWindow(QMainWindow):
             return rows
         except Exception:
             return []
+
+    def build_offline_sessions_from_rows(self, rows):
+        sessions = {}
+        order = []
+
+        for row in rows:
+            key = (row.get('name', ''), row.get('mode', ''))
+            if key not in sessions:
+                sessions[key] = {
+                    'name': row.get('name', ''),
+                    'mode': row.get('mode', ''),
+                    'started_at': '',
+                    'ended_at': '',
+                    'laps': 0,
+                    'total_time': '--:--.---',
+                    'best': '--:--.---',
+                    'avg': '--:--.---',
+                    'consistency_ms': '0',
+                    'rows': [],
+                }
+                order.append(key)
+
+            sessions[key]['rows'].append(row)
+
+        built_sessions = []
+        for key in order:
+            sess = sessions[key]
+            rows_sorted = sorted(sess['rows'], key=lambda r: r['lap_number'])
+            lap_times = [r.get('lap_time_s', 0.0) for r in rows_sorted]
+            total_time = sum(lap_times)
+            best = min(lap_times) if lap_times else None
+            avg = (sum(lap_times) / len(lap_times)) if lap_times else None
+            consistency_ms = 0.0
+            if len(lap_times) > 1 and avg is not None:
+                variance = sum((lap - avg) ** 2 for lap in lap_times) / len(lap_times)
+                consistency_ms = (variance ** 0.5) * 1000.0
+
+            sess.update({
+                'rows': rows_sorted,
+                'laps': len(rows_sorted),
+                'total_time': self.format_lap_time(total_time),
+                'best': self.format_lap_time(best),
+                'avg': self.format_lap_time(avg),
+                'consistency_ms': f"{consistency_ms:.1f}",
+                'resume': f"{sess['name']} | {sess['mode']} | {len(rows_sorted)} VUELTAS | {self.format_lap_time(total_time)}",
+            })
+            built_sessions.append(sess)
+
+        return built_sessions
+
+    def update_offline_session_selector(self, rows):
+        self.offline_loaded_sessions = self.build_offline_sessions_from_rows(rows)
+
+        self.offline_session_selector.blockSignals(True)
+        self.offline_session_selector.clear()
+        self.offline_session_selector.addItem('Selecciona sesión cargada...')
+        for idx, sess in enumerate(self.offline_loaded_sessions, start=1):
+            self.offline_session_selector.addItem(f"{idx}. {sess['name']} ({sess['mode']})")
+        self.offline_session_selector.blockSignals(False)
+
+        if self.offline_loaded_sessions:
+            self.offline_session_selector.setCurrentIndex(1)
+            self.offline_session_summary.setText(
+                f"{len(self.offline_loaded_sessions)} sesiones cargadas. Usa el selector y pulsa SELECCIONAR SESION."
+            )
+            self.select_offline_session()
+        else:
+            self.offline_session_summary.setText('SIN SESIONES CARGADAS')
+            self.offline_session_laps_table.setRowCount(0)
+            self.offline_session_plot.clear()
+            self.offline_session_plot_hint.setText('Selecciona una sesión para visualizar la evolución de vueltas')
+            self.offline_selected_session_index = -1
+
+    def select_offline_session(self):
+        self.on_offline_session_selected(self.offline_session_selector.currentIndex())
 
     def update_offline_combined_laptime_table(self, rows):
         self.offline_unified_laptime_rows = rows
@@ -2179,12 +2789,6 @@ class TelemetryWindow(QMainWindow):
         success, message, num_signals, num_points = self.data_store.load_from_csv(filename)
         
         if success:
-            # Limpiar checkboxes antiguos
-            for i in reversed(range(self.offline_signals_layout.count())):
-                widget = self.offline_signals_layout.itemAt(i).widget()
-                if widget:
-                    widget.deleteLater()
-            
             # Limpiar gráficas antiguas
             for widget in self.offline_plot_widgets.values():
                 self.offline_plots_layout.removeWidget(widget)
@@ -2192,46 +2796,25 @@ class TelemetryWindow(QMainWindow):
             self.offline_plot_widgets.clear()
             self.offline_checkboxes.clear()
             
-            # Crear checkboxes para todas las señales del CSV
-            signals = self.data_store.get_all_signals()
-            
-            signals_group = QGroupBox(f"SEÑALES ({len(signals)})")
-            signals_layout = QVBoxLayout()
-            
-            color_idx = 0
-            for signal in sorted(signals):
-                if signal not in self.color_assignment:
-                    self.color_assignment[signal] = GRAPH_COLORS[color_idx % len(GRAPH_COLORS)]
-                    color_idx += 1
-                
-                chk = QCheckBox(signal)
-                chk.setStyleSheet(f"color: {self.color_assignment[signal]}; font-size: 10pt;")
-                chk.toggled.connect(lambda checked, s=signal: self.toggle_offline_graph(s, checked))
-                signals_layout.addWidget(chk)
-                self.offline_checkboxes[signal] = chk
-            
-            signals_layout.addStretch()
-            signals_group.setLayout(signals_layout)
-            self.offline_signals_layout.addWidget(signals_group)
-            
             # Cambiar al tab de análisis offline
-            self.main_tabs.setCurrentWidget(self.offline_tab)
+            self.pages_stack.setCurrentIndex(4)
             self.offline_right_tabs.setCurrentIndex(0)
 
             unified_rows = self.parse_unified_laptime_rows_from_csv(filename)
             self.update_offline_combined_laptime_table(unified_rows)
+            self.update_offline_session_selector(unified_rows)
             
             QMessageBox.information(
                 self,
-                "CSV Cargado",
-                f"✅ {message}\n\n{num_signals} señales\n{num_points} puntos temporales\n{len(unified_rows)} vueltas laptime"
+                "CSV CARGADO",
+                f"{message.upper()}\n\n{num_signals} SEÑALES\n{num_points} PUNTOS TEMPORALES\n{len(unified_rows)} VUELTAS LAPTIME"
             )
             print(f"[CSV Load] {message}")
         else:
             QMessageBox.critical(
                 self,
-                "Error al Cargar CSV",
-                f"❌ {message}"
+                "ERROR AL CARGAR CSV",
+                f"{message}"
             )
             print(f"[CSV Load] ERROR: {message}")
 
@@ -2299,13 +2882,14 @@ class TelemetryWindow(QMainWindow):
                 self.offline_session_selector.addItem(f"{idx}. {sess['name']} ({sess['mode']})")
             self.offline_session_selector.blockSignals(False)
 
-            self.main_tabs.setCurrentWidget(self.offline_tab)
-            self.offline_right_tabs.setCurrentIndex(1)
-            self.offline_session_details.setText(f"{len(self.offline_loaded_sessions)} sesiones cargadas desde {os.path.basename(filename)}")
-            self.offline_session_laps_table.setRowCount(0)
-            self.offline_session_plot.clear()
-            self.offline_session_plot_hint.setText('Selecciona una sesión para ver su gráfica interactiva')
-            self.offline_selected_session_index = -1
+            self.pages_stack.setCurrentIndex(4)
+            if self.offline_loaded_sessions:
+                self.offline_session_selector.setCurrentIndex(1)
+            else:
+                self.offline_session_laps_table.setRowCount(0)
+                self.offline_session_plot.clear()
+                self.offline_session_plot_hint.setText('Selecciona una sesión para ver su gráfica interactiva')
+                self.offline_selected_session_index = -1
 
         except Exception as exc:
             QMessageBox.critical(self, 'CSV sesiones', f'Error cargando sesiones:\n{exc}')
@@ -2313,13 +2897,9 @@ class TelemetryWindow(QMainWindow):
     def on_offline_session_selected(self, index):
         if index <= 0 or index - 1 >= len(self.offline_loaded_sessions):
             self.offline_selected_session_index = -1
-            self.offline_session_details.setText('Sin sesión seleccionada')
+            self.offline_session_summary.setText('SIN SESIÓN SELECCIONADA')
             self.offline_session_laps_table.setRowCount(0)
             self.offline_current_session_rows = []
-            self.offline_compare_lap_a.clear()
-            self.offline_compare_lap_b.clear()
-            self.offline_compare_lap_a.addItem('Vuelta A')
-            self.offline_compare_lap_b.addItem('Vuelta B')
             self.offline_session_plot.clear()
             self.offline_session_plot_hint.setText('Selecciona una sesión para visualizar la evolución de vueltas')
             return
@@ -2329,12 +2909,8 @@ class TelemetryWindow(QMainWindow):
         rows = sorted(sess.get('rows', []), key=lambda r: r['lap_number'])
         self.offline_current_session_rows = rows
 
-        self.offline_session_details.setText(
-            f"Nombre: {sess['name']}\n"
-            f"Modo: {sess['mode']}\n"
-            f"Inicio: {sess['started_at']} | Fin: {sess['ended_at']}\n"
-            f"Vueltas: {sess['laps']} | Total: {sess['total_time']}\n"
-            f"Mejor: {sess['best']} | Media: {sess['avg']} | Consistencia: {sess['consistency_ms']} ms"
+        self.offline_session_summary.setText(
+            f"{sess['name']} | {sess['mode']} | {sess['laps']} vueltas | {sess['total_time']}"
         )
 
         self.offline_session_laps_table.setRowCount(len(rows))
@@ -2344,19 +2920,7 @@ class TelemetryWindow(QMainWindow):
             self.offline_session_laps_table.setItem(row_idx, 2, QTableWidgetItem(lap['delta_fmt']))
             self.offline_session_laps_table.setItem(row_idx, 3, QTableWidgetItem(lap['state']))
 
-        self.offline_compare_lap_a.blockSignals(True)
-        self.offline_compare_lap_b.blockSignals(True)
-        self.offline_compare_lap_a.clear()
-        self.offline_compare_lap_b.clear()
-        for lap in rows:
-            label = f"V{lap['lap_number']}"
-            self.offline_compare_lap_a.addItem(label, lap['lap_number'])
-            self.offline_compare_lap_b.addItem(label, lap['lap_number'])
-        self.offline_compare_lap_a.blockSignals(False)
-        self.offline_compare_lap_b.blockSignals(False)
-
         self.render_offline_session_plot(rows)
-        self.offline_right_tabs.setCurrentIndex(1)
 
     def render_offline_session_plot(self, rows):
         self.offline_session_plot.clear()
@@ -2403,6 +2967,9 @@ class TelemetryWindow(QMainWindow):
         if not self.offline_current_session_rows:
             return
 
+        if not hasattr(self, 'offline_compare_lap_a') or not hasattr(self, 'offline_compare_lap_b'):
+            return
+
         lap_a_num = self.offline_compare_lap_a.currentData()
         lap_b_num = self.offline_compare_lap_b.currentData()
         if lap_a_num is None or lap_b_num is None:
@@ -2423,6 +2990,18 @@ class TelemetryWindow(QMainWindow):
         self.offline_session_plot_hint.setText(
             f"Comparando V{lap_a_num} vs V{lap_b_num}: {lap_a['lap_time_fmt']} vs {lap_b['lap_time_fmt']} | Δ={sign}{abs(delta):.3f}s"
         )
+
+    def show_selected_offline_combined_lap(self):
+        if not self.offline_filtered_laptime_rows:
+            return
+
+        current_row = self.offline_combined_laps_table.currentRow()
+        if current_row < 0 or current_row >= len(self.offline_filtered_laptime_rows):
+            current_row = 0
+            self.offline_combined_laps_table.selectRow(current_row)
+
+        lap = self.offline_filtered_laptime_rows[current_row]
+        self.jump_offline_plots_to_timestamp(lap.get('timestamp', 0.0))
     
     def toggle_offline_graph(self, key, checked):
         """Muestra u oculta una gráfica en modo offline"""
@@ -2460,7 +3039,7 @@ class TelemetryWindow(QMainWindow):
         if not self.popup_enabled or not self.offline_plot_widgets:
             return
         
-        lines = [f"⏱ Tiempo: {x_pos:.2f}s", "="*30]
+        lines = [f"TIEMPO: {x_pos:.2f}s", "="*30]
         
         for signal_name, plot_widget in sorted(self.offline_plot_widgets.items()):
             value = plot_widget.get_value_at_time(x_pos)
@@ -2480,15 +3059,20 @@ class TelemetryWindow(QMainWindow):
             self.value_popup.raise_()
 
     def update_status(self, msg, color_code):
-        bg_color = "#333"
-        if color_code == "green": bg_color = "#2e7d32"
-        elif color_code == "orange": bg_color = "#f57c00"
-        elif color_code == "red": bg_color = "#c62828"
-        self.status_label.setText(f"ESTADO: {msg}")
-        self.status_label.setStyleSheet(f"background-color: {bg_color}; color: white; padding: 5px; font-weight: bold; border-radius: 3px;")
+        # Mostrar puerto específico en verde cuando está conectado, naranja "Buscando..." en otros casos
+        if color_code == "green":
+            bg_color = "#2e7d32"
+            status_text = f"PUERTO: {msg.upper()}"
+        else:
+            # Siempre naranja para búsqueda/error
+            bg_color = "#f57c00"
+            status_text = "BUSCANDO..."
+        
+        self.status_label.setText(status_text)
+        self.status_label.setStyleSheet(status_label_style(bg_color))
 
     def append_trace(self, text):
-        if self.main_tabs.currentWidget() == self.traces_tab:
+        if self.pages_stack.currentIndex() == 3:
             self.trace_console.appendPlainText(text)
 
     def update_ui_tick(self):
@@ -2517,8 +3101,10 @@ class TelemetryWindow(QMainWindow):
                 label_widget.setText("---")
                 label_widget.setStyleSheet("color: #444; font-weight: normal; font-size: 11px;")
 
-        # Actualizar todas las gráficas activas
-        if self.main_tabs.currentIndex() == 0:
+        # Actualizar gráficas según la página activa
+        if self.pages_stack.currentIndex() == 0:
+            self.update_dashboard_view(data_snapshot, times_snapshot)
+        elif self.pages_stack.currentIndex() == 1:
             for plot_widget in self.plot_widgets.values():
                 plot_widget.update_plot()
 
@@ -2528,6 +3114,10 @@ class TelemetryWindow(QMainWindow):
         """Manejo de teclas globales"""
         if event.key() == Qt.Key.Key_F2:
             self.toggle_popup()
+        elif event.key() == Qt.Key.Key_Space:
+            # Simular trigger óptico de laptimer
+            if self.session_running and not self.session_paused:
+                self.data_store.add_sample('laptimer_timestamp_s', time.time())
         else:
             super().keyPressEvent(event)
     
@@ -2545,7 +3135,7 @@ class TelemetryWindow(QMainWindow):
             msg_box.setIcon(QMessageBox.Icon.Question)
             
             # Botones personalizados
-            save_btn = msg_box.addButton("💾 Guardar y Salir", QMessageBox.ButtonRole.AcceptRole)
+            save_btn = msg_box.addButton("GUARDAR Y SALIR", QMessageBox.ButtonRole.AcceptRole)
             exit_btn = msg_box.addButton("Salir sin Guardar", QMessageBox.ButtonRole.DestructiveRole)
             cancel_btn = msg_box.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
             
