@@ -10,10 +10,6 @@
 #include "can_priorities.hpp"
 #include "common_config.hpp"
 
-static const uint32_t TOA_MS = 57;
-static const uint32_t TX_INTERVAL_MS =
-        570; // TODO: calcular en tiempo de compilación pq depende del spreading factor etc etc
-
 static TelemetryPacket lvBuf[FILTER_TABLE_SIZE];
 static volatile bool lvPending[FILTER_TABLE_SIZE];
 static uint32_t lastQueuedMs[FILTER_TABLE_SIZE];
@@ -61,8 +57,8 @@ void taskLoRa(void *pvParameters) {
         return;
     }
     xSemaphoreGive(txReadySem);
-    Serial.printf("[LORA] INIT OK\n\t\t%d IDs activos, TX_INTERVAL=%ums\n", (int) FILTER_TABLE_SIZE, TX_INTERVAL_MS);
-
+    Serial.printf("[LoRa] OK — ToA=%ums TX_interval=%ums DC=%u%%\n", lora_timing::TOA_MS, lora_timing::TX_INTERVAL_MS,
+                  lora_timing::DUTY_CYCLE_PERCENT);
     uint32_t lastTxStart = 0, lastLog = 0;
 
     while (1) {
@@ -86,11 +82,12 @@ void taskLoRa(void *pvParameters) {
 
         { // Check duty cycle
             uint32_t elapsed = millis() - lastTxStart;
-            if (elapsed < TX_INTERVAL_MS)
-                vTaskDelay(pdMS_TO_TICKS(TX_INTERVAL_MS - elapsed));
+            if (elapsed < lora_timing::TX_INTERVAL_MS)
+                vTaskDelay(pdMS_TO_TICKS(lora_timing::TX_INTERVAL_MS - elapsed));
         }
 
-        if (xSemaphoreTake(txReadySem, pdMS_TO_TICKS(700)) == pdTRUE) {
+        if (xSemaphoreTake(txReadySem, pdMS_TO_TICKS(lora_timing::TX_INTERVAL_MS + lora_timing::TOA_MS + 50u)) ==
+            pdTRUE) {
             lastTxStart = millis();
             statSent++;
             radio.startTransmit((uint8_t *) &telemetry_packet, sizeof(telemetry_packet));
@@ -102,7 +99,7 @@ void taskLoRa(void *pvParameters) {
     log:
         if (millis() - lastLog > 10000) {
             lastLog = millis();
-            float dc = (float) statSent * TOA_MS / (millis() / 1000.0f) / 10.0f;
+            float dc = (float) statSent * lora_timing::TOA_MS / (millis() / 1000.0f) / 10.0f;
             Serial.printf("[LORA] tx=%u | rate_drop=%u | skip=%u | DC=%.1f%%\n", statSent, statRateDrop, statSkipId,
                           dc);
         }
