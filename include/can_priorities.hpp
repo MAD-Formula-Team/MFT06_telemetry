@@ -37,14 +37,14 @@ static const CANFilterEntry CAN_FILTER_TABLE[] = {
         // ─────────────────────────────────────────────────────────────
         // PRIORIDAD 3
         // ─────────────────────────────────────────────────────────────
-        {966, 10000, 3, "auto_values"}, // angle_slip / angle_track, curvature_radius ¿bulo de la ultraderecha?
-        {177, 10000, 3, "dampers"}, // realmente esto va en el carro?
+        // {966, 10000, 3, "auto_values"}, // angle_slip / angle_track, curvature_radius ¿bulo de la ultraderecha?
+        // {177, 10000, 3, "dampers"}, // realmente esto va en el carro?
 
         // IMU
-        {965, 12000, 3, "accel_cart"},
-        {962, 12000, 3, "pos_eul"},
-        {963, 15000, 3, "vel_cart"},
-        {964, 15000, 3, "vel_eul"},
+        // {965, 12000, 3, "accel_cart"},
+        // {962, 12000, 3, "pos_eul"},
+        // {963, 15000, 3, "vel_cart"},
+        // {964, 15000, 3, "vel_eul"},
 
         // ─────────────────────────────────────────────────────────────
         // PRIORIDAD 4

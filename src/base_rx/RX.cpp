@@ -3,7 +3,7 @@
 #include <RadioLib.h>
 #include <Wire.h>
 #include <SSD1306Wire.h>
-#include "common_config.h"
+#include "common_config.hpp"
 
 // --- OBJETO DISPLAY ---
 SSD1306Wire display(0x3c, OLED_SDA, OLED_SCL);
@@ -37,7 +37,7 @@ ICACHE_RAM_ATTR void setFlag(void) {
 
 void iniciarOLED() {
   pinMode(OLED_VEXT, OUTPUT);
-  digitalWrite(OLED_VEXT, LOW);  
+  digitalWrite(OLED_VEXT, LOW);
   delay(100);
 
   pinMode(OLED_RST, OUTPUT);
@@ -188,7 +188,7 @@ void setup() {
     while(1);
   }
 
-  // Lanzar task OLED 
+  // Lanzar task OLED
   xTaskCreatePinnedToCore(
     taskOLED,     // Función
     "TaskOLED",   // Nombre debug
@@ -226,7 +226,7 @@ void loop() {
         Serial.print(packet.data[i], HEX);
       }
       Serial.println();
-      
+
       // Todo este bloque no se puede quitar
 
     } else {

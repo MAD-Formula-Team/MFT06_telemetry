@@ -27,6 +27,9 @@ static SemaphoreHandle_t pendingMutex = nullptr;
 static volatile uint32_t hbLastSeen[HEARTBEAT_TABLE_SIZE];
 static volatile bool hbEverSeen[HEARTBEAT_TABLE_SIZE];
 
+static float    fuelAccumCc  = 0.0f;
+static uint32_t fuelLastMs   = 0;
+
 static volatile uint32_t statSent = 0;
 static volatile uint32_t statRateDrop = 0;
 static volatile uint32_t statSkipId = 0;
@@ -259,8 +262,24 @@ void loop() {
         return;
     }
 
-    // Solo encolar traza si ha pasado suficiente del polling rate
     uint32_t now = millis();
+
+    // Acumula consumo en cada trama (antes del rate-limit) y reemplaza bytes 2-3
+    // con el acumulado en cc (escala 1 cc/LSB, max 65535 cc). DBC: (1,0) "cc"
+    if (rxId == 931 && rxLen >= 4) {
+        uint16_t raw = (uint16_t)rxBuf[2] | ((uint16_t)rxBuf[3] << 8);
+        float instant_ccmin = raw * 0.1f;
+        if (fuelLastMs > 0) {
+            float dt_min = (now - fuelLastMs) / 60000.0f;
+            fuelAccumCc += instant_ccmin * dt_min;
+        }
+        fuelLastMs = now;
+        uint16_t accum_raw = fuelAccumCc > 65535.0f ? 65535u : (uint16_t)fuelAccumCc;
+        rxBuf[2] = (uint8_t)(accum_raw & 0xFF);
+        rxBuf[3] = (uint8_t)(accum_raw >> 8);
+    }
+
+    // Solo encolar traza si ha pasado suficiente del polling rate
     if (!firstSeen[current_can_id] &&
         (now - lastQueuedMs[current_can_id] < CAN_FILTER_TABLE[current_can_id].minIntervalMs)) {
         statRateDrop++;
