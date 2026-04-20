@@ -1,8 +1,8 @@
 #include <Arduino.h>
 #include <RadioLib.h>
 #include <SPI.h>
-#include <Wire.h>
 #include <SSD1306Wire.h>
+#include <Wire.h>
 #include <cstdint>
 #include <mcp_can.h>
 
@@ -27,8 +27,8 @@ static SemaphoreHandle_t pendingMutex = nullptr;
 static volatile uint32_t hbLastSeen[HEARTBEAT_TABLE_SIZE];
 static volatile bool hbEverSeen[HEARTBEAT_TABLE_SIZE];
 
-static float    fuelAccumCc  = 0.0f;
-static uint32_t fuelLastMs   = 0;
+static float fuelAccumCc = 0.0f;
+static uint32_t fuelLastMs = 0;
 
 static volatile uint32_t statSent = 0;
 static volatile uint32_t statRateDrop = 0;
@@ -67,10 +67,10 @@ static const char *HB_LABELS[] = {"DSH", "GER", "STR", "PDM", "NOD"};
 
 static void actualizarOLED() {
     uint32_t now_ms = millis();
-    uint32_t tx     = statSent;
-    uint32_t drop   = statRateDrop;
-    uint32_t err    = statMutexErr;
-    uint32_t dc     = (now_ms > 0) ? (tx * lora_timing::TOA_MS / (now_ms / 1000u)) : 0u;
+    uint32_t tx = statSent;
+    uint32_t drop = statRateDrop;
+    uint32_t err = statMutexErr;
+    uint32_t dc = (now_ms > 0) ? (tx * lora_timing::TOA_MS / (now_ms / 1000u)) : 0u;
 
     display.clear();
     display.setFont(ArialMT_Plain_10);
@@ -178,16 +178,16 @@ void taskLoRa(void *pvParameters) {
             lastHbCheck = now_ms;
             for (int i = 0; i < (int) HEARTBEAT_TABLE_SIZE; i++) {
                 if (hbEverSeen[i] && (now_ms - hbLastSeen[i] > HEARTBEAT_TABLE[i].timeoutMs))
-                    LOGF("[HB - WARN] sin heartbeat: %s (0x%03X) — %ums sin mensaje\n",
-                         HEARTBEAT_TABLE[i].name, HEARTBEAT_TABLE[i].canId, now_ms - hbLastSeen[i]);
+                    LOGF("[HB - WARN] sin heartbeat: %s (0x%03X) — %ums sin mensaje\n", HEARTBEAT_TABLE[i].name,
+                         HEARTBEAT_TABLE[i].canId, now_ms - hbLastSeen[i]);
             }
         }
 
         if (now_ms - lastLog > 10000u) {
             lastLog = now_ms;
             uint32_t dc = (uint32_t) statSent * lora_timing::TOA_MS / (now_ms / 1000u);
-            LOGF("[LORA] tx=%u | rate_drop=%u | skip=%u | DC=%u.%u%%\n", statSent, statRateDrop, statSkipId,
-                 dc / 10u, dc % 10u);
+            LOGF("[LORA] tx=%u | rate_drop=%u | skip=%u | DC=%u.%u%%\n", statSent, statRateDrop, statSkipId, dc / 10u,
+                 dc % 10u);
         }
     }
 }
@@ -267,33 +267,35 @@ void loop() {
     // Acumula consumo en cada trama (antes del rate-limit) y reemplaza bytes 2-3
     // con el acumulado en cc (escala 1 cc/LSB, max 65535 cc). DBC: (1,0) "cc"
     if (rxId == 931 && rxLen >= 4) {
-        uint16_t raw = (uint16_t)rxBuf[2] | ((uint16_t)rxBuf[3] << 8);
+        uint16_t raw = (uint16_t) rxBuf[2] | ((uint16_t) rxBuf[3] << 8);
         float instant_ccmin = raw * 0.1f;
         if (fuelLastMs > 0) {
             float dt_min = (now - fuelLastMs) / 60000.0f;
             fuelAccumCc += instant_ccmin * dt_min;
         }
         fuelLastMs = now;
-        uint16_t accum_raw = fuelAccumCc > 65535.0f ? 65535u : (uint16_t)fuelAccumCc;
-        rxBuf[2] = (uint8_t)(accum_raw & 0xFF);
-        rxBuf[3] = (uint8_t)(accum_raw >> 8);
+        uint16_t accum_raw = fuelAccumCc > 65535.0f ? 65535u : (uint16_t) fuelAccumCc;
+        rxBuf[2] = (uint8_t) (accum_raw & 0xFF);
+        rxBuf[3] = (uint8_t) (accum_raw >> 8);
     }
 
-    // Solo encolar traza si ha pasado suficiente del polling rate
-    if (!firstSeen[current_can_id] &&
-        (now - lastQueuedMs[current_can_id] < CAN_FILTER_TABLE[current_can_id].minIntervalMs)) {
+    bool rate_ok = firstSeen[current_can_id] ||
+                   (now - lastQueuedMs[current_can_id] >= CAN_FILTER_TABLE[current_can_id].minIntervalMs);
+    if (!rate_ok)
         statRateDrop++;
-        return;
-    }
 
     if (xSemaphoreTake(pendingMutex, pdMS_TO_TICKS(1)) == pdTRUE) {
-        lvBuf[current_can_id].packetId = seqNum++;
+        // Siempre actualizar buffer con lo último visto
         lvBuf[current_can_id].canId = (uint16_t) rxId;
         lvBuf[current_can_id].len = rxLen;
         memcpy(lvBuf[current_can_id].data, rxBuf, 8);
-        lvPending[current_can_id] = true;
-        firstSeen[current_can_id] = false;
-        lastQueuedMs[current_can_id] = now;
+        // Solo encolar para LoRa si ha pasado el intervalo mínimo
+        if (rate_ok) {
+            lvBuf[current_can_id].packetId = seqNum++;
+            lvPending[current_can_id] = true;
+            firstSeen[current_can_id] = false;
+            lastQueuedMs[current_can_id] = now;
+        }
         xSemaphoreGive(pendingMutex);
     } else {
         statMutexErr++;
