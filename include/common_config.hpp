@@ -4,6 +4,21 @@
 #include <Arduino.h>
 
 // ================================================================
+// LOGGING — comentar para deshabilitar en producción (sin USB)
+// ================================================================
+#define SERIAL_LOGGING_ENABLED // comentar linea para quitar logging
+
+#ifdef SERIAL_LOGGING_ENABLED
+  #define LOG(...)  Serial.print(__VA_ARGS__)
+  #define LOGF(...) Serial.printf(__VA_ARGS__)
+  #define LOGL(...) Serial.println(__VA_ARGS__)
+#else
+  #define LOG(...)  do {} while(0)
+  #define LOGF(...) do {} while(0)
+  #define LOGL(...) do {} while(0)
+#endif
+
+// ================================================================
 // PINES LoRa
 // ================================================================
 #define LORA_NSS 8
