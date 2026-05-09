@@ -70,7 +70,9 @@ static void actualizarOLED() {
     uint32_t tx = statSent;
     uint32_t drop = statRateDrop;
     uint32_t err = statMutexErr;
-    uint32_t dc = (now_ms > 0) ? (tx * lora_timing::TOA_MS / (now_ms / 1000u)) : 0u;
+    // Duty cycle en décimas de % (para mostrar X.Y%). Usamos 64 bits para evitar
+    // overflow y dividimos al final para no perder precisión ni dividir por cero.
+    uint32_t dc = (now_ms > 0) ? (uint32_t) ((uint64_t) tx * lora_timing::TOA_MS * 1000ull / now_ms) : 0u;
 
     display.clear();
     display.setFont(ArialMT_Plain_10);
@@ -185,7 +187,8 @@ void taskLoRa(void *pvParameters) {
 
         if (now_ms - lastLog > 10000u) {
             lastLog = now_ms;
-            uint32_t dc = (uint32_t) statSent * lora_timing::TOA_MS / (now_ms / 1000u);
+            uint32_t secs = now_ms / 1000u;
+            uint32_t dc = (secs > 0) ? ((uint32_t) statSent * lora_timing::TOA_MS / secs) : 0u;
             LOGF("[LORA] tx=%u | rate_drop=%u | skip=%u | DC=%u.%u%%\n", statSent, statRateDrop, statSkipId, dc / 10u,
                  dc % 10u);
         }

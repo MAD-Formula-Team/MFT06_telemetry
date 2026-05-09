@@ -33,11 +33,13 @@
 #define CAN_MISO    33
 #define CAN_MOSI    35
 
+/*
 // --- PINES OLED (SSD1306 128x64) ---
 #define OLED_SDA    17
 #define OLED_SCL    18
 #define OLED_RST    21
 #define Vext        36  // Pin de alimentación de la pantalla
+*/
 
 // --- CONSTANTES DE TIEMPO ---
 #define VENTANA_TIEMPO      2000  // Ventana temporal para filtro de IDs duplicadas (ms)
