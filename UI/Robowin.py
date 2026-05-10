@@ -875,130 +875,333 @@ class TelemetryWindow(QMainWindow):
             grouped.setdefault(signal["group"], []).append(signal)
         return grouped
 
-    def select_dashboard_critical_signals(self):
-        preferred_keys = ["ect", "oil_temp", "batt_volt"]
-        by_key = {sig["key"]: sig for sig in self.signal_catalog}
-
-        selected = [by_key[key] for key in preferred_keys if key in by_key]
-        if len(selected) == len(preferred_keys):
-            return selected
-
-        # Fallback seguro si faltara alguna señal en el DBC
-        motor_signals = list(self.signals_by_group.get("MOTOR", []))
-        if len(motor_signals) >= 3:
-            return motor_signals[:3]
-
-        return list(self.signal_catalog)[:3]
-
     def setup_todo_ui(self):
-        # Splitter principal: PANEL CONTROL | GRÁFICAS
-        main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        main_splitter.setHandleWidth(1)
-        main_splitter.setChildrenCollapsible(False)
-        self.todo_tab.setLayout(QVBoxLayout())
-        self.todo_tab.layout().setContentsMargins(0, 0, 0, 0)
-        self.todo_tab.layout().setSpacing(0)
-        self.todo_tab.layout().addWidget(main_splitter)
-        
-        # --- PANEL IZQUIERDO: CONTROLES ---
-        left_panel = QWidget()
-        left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(6, 6, 6, 6)
-        left_layout.setSpacing(8)
-        
-        # Botones de control
-        control_group = QGroupBox("CONTROL")
-        control_layout = QVBoxLayout()
-        control_layout.setContentsMargins(6, 6, 6, 6)
-        control_layout.setSpacing(6)
-        
+        main_layout = QVBoxLayout(self.todo_tab)
+        main_layout.setContentsMargins(6, 6, 6, 6)
+        main_layout.setSpacing(6)
+
+        # ── Slim toolbar ──────────────────────────────────────────────────────
+        toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        toolbar.setSpacing(8)
+
         export_btn = QPushButton("EXPORTAR DATOS")
         export_btn.setStyleSheet(action_button_style("#388e3c", font_size_pt=9))
+        export_btn.setMaximumWidth(160)
+        export_btn.setMaximumHeight(32)
         export_btn.clicked.connect(self.export_to_csv)
-        control_layout.addWidget(export_btn)
-        
-        control_group.setLayout(control_layout)
-        left_layout.addWidget(control_group)
-        
-        # Selector de ventana temporal
-        window_group = QGroupBox("VENTANA TEMPORAL")
-        window_layout = QVBoxLayout()
-        window_layout.setContentsMargins(6, 6, 6, 6)
-        window_layout.setSpacing(6)
-        
-        self.window_button_group = QButtonGroup()
-        
-        self.rb_15s = QRadioButton("15 SEGUNDOS")
-        self.rb_15s.setChecked(True)
-        self.rb_15s.toggled.connect(lambda checked: checked and self.change_window_mode('sliding', 15.0))
-        window_layout.addWidget(self.rb_15s)
-        self.window_button_group.addButton(self.rb_15s)
-        
-        self.rb_5min = QRadioButton("5 MINUTOS")
-        self.rb_5min.toggled.connect(lambda checked: checked and self.change_window_mode('sliding', 300.0))
-        window_layout.addWidget(self.rb_5min)
-        self.window_button_group.addButton(self.rb_5min)
-        
-        self.rb_full = QRadioButton("TODO EL TIEMPO")
-        self.rb_full.toggled.connect(lambda checked: checked and self.change_window_mode('full', None))
-        window_layout.addWidget(self.rb_full)
-        self.window_button_group.addButton(self.rb_full)
-        
-        window_group.setLayout(window_layout)
-        left_layout.addWidget(window_group)
-        
-        # Grupos de señales con checkboxes
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setStyleSheet("QScrollArea { border: none; }")
-        
-        scroll_content = QWidget()
-        scroll_layout = QVBoxLayout(scroll_content)
-        scroll_layout.setContentsMargins(0, 0, 0, 0)
-        scroll_layout.setSpacing(6)
-        
-        for group_name in ["MOTOR", "CHASIS", "ELECTRICO", "OTROS"]:
-            group_signals = self.signals_by_group.get(group_name, [])
-            if not group_signals:
-                continue
+        toolbar.addWidget(export_btn)
+        toolbar.addStretch()
 
-            signals = [(sig["label"], sig["key"], sig["unit"]) for sig in group_signals]
-            if group_name == "MOTOR":
-                group_widget = self.create_data_group(group_name, signals, font_size=12, prominent=True)
-            else:
-                group_widget = self.create_data_group(group_name, signals)
-            scroll_layout.addWidget(group_widget)
-        
-        scroll_layout.addStretch()
-        scroll_area.setWidget(scroll_content)
-        left_layout.addWidget(scroll_area)
-        
-        # --- PANEL DERECHO: GRÁFICAS ---
-        right_panel = QWidget()
-        right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(6, 6, 6, 6)
-        right_layout.setSpacing(8)
-        
-        # ScrollArea para gráficas
-        self.plots_scroll = QScrollArea()
-        self.plots_scroll.setWidgetResizable(True)
-        self.plots_scroll.setStyleSheet("QScrollArea { border: 1px solid #444; background-color: #1e1e1e; }")
-        
-        self.plots_container = QWidget()
-        self.plots_layout = QVBoxLayout(self.plots_container)
-        self.plots_layout.setContentsMargins(0, 0, 0, 0)
-        self.plots_layout.setSpacing(0)
-        self.plots_layout.addStretch()
-        
-        self.plots_scroll.setWidget(self.plots_container)
-        right_layout.addWidget(self.plots_scroll)
-        
-        # Configurar splitter
-        main_splitter.addWidget(left_panel)
-        main_splitter.addWidget(right_panel)
-        main_splitter.setStretchFactor(0, 1)  # Panel izquierdo: 1 parte
-        main_splitter.setStretchFactor(1, 5)  # Panel derecho: 5 partes (más ancho para gráficas)
-        main_splitter.setSizes([220, 1130])
+        main_layout.addLayout(toolbar)
+
+        # ── 2x2 grid ──────────────────────────────────────────────────────────
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(6)
+
+        # MOTOR and CHASIS get more vertical space than ELECTRICO and OTROS
+        grid.setRowStretch(0, 3)   # top row
+        grid.setRowStretch(1, 2)   # bottom row
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+
+        panel_configs = [
+            ("MOTOR",     0, 0),
+            ("CHASIS",    0, 1),
+            ("ELECTRICO", 1, 0),
+            ("OTROS",     1, 1),
+        ]
+
+        for group_name, row, col in panel_configs:
+            panel = self._build_todo_panel(group_name)
+            grid.addWidget(panel, row, col)
+
+        main_layout.addLayout(grid, 1)
+
+
+    def _build_todo_panel(self, group_name):
+        """Builds a scrollable panel of dashboard cards for a signal group."""
+        signals = self.signals_by_group.get(group_name, [])
+
+        group_box = QGroupBox(group_name)
+        group_box.setStyleSheet(
+            "QGroupBox {"
+            "  border: 1px solid #3a3a3a;"
+            "  border-radius: 0px;"
+            "  margin-top: 14px;"
+            "  font-size: 11pt;"
+            "  font-weight: 700;"
+            "  color: #e0e0e0;"
+            "}"
+            "QGroupBox::title {"
+            "  subcontrol-origin: margin;"
+            "  left: 10px;"
+            "  padding: 0 4px;"
+            "}"
+        )
+        group_layout = QVBoxLayout(group_box)
+        group_layout.setContentsMargins(6, 10, 6, 6)
+        group_layout.setSpacing(4)
+
+        # Scroll area so cards never overflow
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(
+            "QScrollArea { border: none; background: transparent; }"
+            "QScrollBar:vertical { width: 6px; }"
+        )
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        cards_widget = QWidget()
+        cards_widget.setStyleSheet("background: transparent;")
+        cards_layout = QGridLayout(cards_widget)
+        cards_layout.setContentsMargins(0, 0, 0, 0)
+        cards_layout.setSpacing(0)
+
+        for idx, sig in enumerate(signals):
+            key   = sig["key"]
+            label = sig["label"]
+            unit  = sig["unit"]
+
+            if key not in self.color_assignment:
+                self.color_assignment[key] = GRAPH_COLORS[len(self.color_assignment) % len(GRAPH_COLORS)]
+            color = self.color_assignment[key]
+
+            card = self._build_signal_card(key, label, unit, color)
+            # 2 columns of cards inside each panel
+            cards_layout.addWidget(card, idx // 2, idx % 2)
+
+        # Push cards to top
+        filler = QWidget()
+        filler.setSizePolicy(filler.sizePolicy().horizontalPolicy(),
+                            filler.sizePolicy().verticalPolicy())
+        from PyQt6.QtWidgets import QSizePolicy
+        filler.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        cards_layout.addWidget(filler, (len(signals) // 2) + 1, 0, 1, 2)
+
+        scroll.setWidget(cards_widget)
+        group_layout.addWidget(scroll)
+        return group_box
+
+
+    def _build_signal_card(self, key, label, unit, color):
+        """Slim horizontal bar: colored left border | name | value | unit"""
+        card = QFrame()
+        card.setFrameShape(QFrame.Shape.StyledPanel)
+        card.setStyleSheet(
+            f"QFrame {{"
+            f"  background-color: #171c24;"
+            f"  border: none;"
+            f"  border-left: 3px solid {color};"
+            f"  border-bottom: 1px solid #222831;"
+            f"}}"
+        )
+        card.setFixedHeight(32)
+
+        h = QHBoxLayout(card)
+        h.setContentsMargins(8, 0, 8, 0)
+        h.setSpacing(0)
+
+        # Signal name — left aligned, muted
+        name_lbl = QLabel(label)
+        name_lbl.setStyleSheet(
+            "color: #7a8fa6; font-size: 9pt; font-weight: 600;"
+            "border: none; background: transparent;"
+        )
+        h.addWidget(name_lbl, 3)
+
+        # Separator dot
+        sep = QLabel("·")
+        sep.setStyleSheet("color: #2e3a47; border: none; background: transparent;")
+        sep.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        h.addWidget(sep)
+
+        # Value — right aligned, bright and bold
+        val_lbl = QLabel("---")
+        val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        val_lbl.setStyleSheet(
+            f"color: {color}; font-size: 11pt; font-weight: 800;"
+            f"border: none; background: transparent;"
+        )
+        h.addWidget(val_lbl, 2)
+
+        # Unit — small, right side
+        unit_lbl = QLabel(f" {unit}")
+        unit_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        unit_lbl.setStyleSheet(
+            "color: #445060; font-size: 8pt;"
+            "border: none; background: transparent;"
+        )
+        unit_lbl.setFixedWidth(36)
+        h.addWidget(unit_lbl)
+
+        self.ui_labels[key] = val_lbl
+        return card
+
+    def setup_todo_ui(self):
+        main_layout = QVBoxLayout(self.todo_tab)
+        main_layout.setContentsMargins(6, 6, 6, 6)
+        main_layout.setSpacing(6)
+
+        # ── Slim toolbar ──────────────────────────────────────────────────────
+        toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        toolbar.setSpacing(8)
+
+        export_btn = QPushButton("EXPORTAR DATOS")
+        export_btn.setStyleSheet(action_button_style("#388e3c", font_size_pt=9))
+        export_btn.setMaximumWidth(160)
+        export_btn.setMaximumHeight(32)
+        export_btn.clicked.connect(self.export_to_csv)
+        toolbar.addWidget(export_btn)
+        toolbar.addStretch()
+
+        main_layout.addLayout(toolbar)
+
+        # ── 2x2 grid ──────────────────────────────────────────────────────────
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(6)
+
+        # MOTOR and CHASIS get more vertical space than ELECTRICO and OTROS
+        grid.setRowStretch(0, 3)   # top row
+        grid.setRowStretch(1, 2)   # bottom row
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+
+        panel_configs = [
+            ("MOTOR",     0, 0),
+            ("CHASIS",    0, 1),
+            ("ELECTRICO", 1, 0),
+            ("OTROS",     1, 1),
+        ]
+
+        for group_name, row, col in panel_configs:
+            panel = self._build_todo_panel(group_name)
+            grid.addWidget(panel, row, col)
+
+        main_layout.addLayout(grid, 1)
+
+
+    def _build_todo_panel(self, group_name):
+        """Builds a scrollable panel of dashboard cards for a signal group."""
+        signals = self.signals_by_group.get(group_name, [])
+
+        group_box = QGroupBox(group_name)
+        group_box.setStyleSheet(
+            "QGroupBox {"
+            "  border: 1px solid #3a3a3a;"
+            "  border-radius: 0px;"
+            "  margin-top: 14px;"
+            "  font-size: 11pt;"
+            "  font-weight: 700;"
+            "  color: #e0e0e0;"
+            "}"
+            "QGroupBox::title {"
+            "  subcontrol-origin: margin;"
+            "  left: 10px;"
+            "  padding: 0 4px;"
+            "}"
+        )
+        group_layout = QVBoxLayout(group_box)
+        group_layout.setContentsMargins(6, 10, 6, 6)
+        group_layout.setSpacing(4)
+
+        # Scroll area so cards never overflow
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(
+            "QScrollArea { border: none; background: transparent; }"
+            "QScrollBar:vertical { width: 6px; }"
+        )
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        cards_widget = QWidget()
+        cards_widget.setStyleSheet("background: transparent;")
+        cards_layout = QGridLayout(cards_widget)
+        cards_layout.setContentsMargins(4, 4, 4, 4)
+        cards_layout.setSpacing(6)
+
+        for idx, sig in enumerate(signals):
+            key   = sig["key"]
+            label = sig["label"]
+            unit  = sig["unit"]
+
+            if key not in self.color_assignment:
+                self.color_assignment[key] = GRAPH_COLORS[len(self.color_assignment) % len(GRAPH_COLORS)]
+            color = self.color_assignment[key]
+
+            card = self._build_signal_card(key, label, unit, color)
+            # 2 columns of cards inside each panel
+            cards_layout.addWidget(card, idx // 2, idx % 2)
+
+        # Push cards to top
+        filler = QWidget()
+        filler.setSizePolicy(filler.sizePolicy().horizontalPolicy(),
+                            filler.sizePolicy().verticalPolicy())
+        from PyQt6.QtWidgets import QSizePolicy
+        filler.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        cards_layout.addWidget(filler, (len(signals) // 2) + 1, 0, 1, 2)
+
+        scroll.setWidget(cards_widget)
+        group_layout.addWidget(scroll)
+        return group_box
+
+
+    def _build_signal_card(self, key, label, unit, color):
+        """Slim horizontal bar: colored left border | name | value | unit"""
+        card = QFrame()
+        card.setFrameShape(QFrame.Shape.StyledPanel)
+        card.setStyleSheet(
+            f"QFrame {{"
+            f"  background-color: #171c24;"
+            f"  border: none;"
+            f"  border-left: 3px solid {color};"
+            f"  border-bottom: 1px solid #222831;"
+            f"}}"
+        )
+        card.setFixedHeight(32)
+
+        h = QHBoxLayout(card)
+        h.setContentsMargins(8, 0, 8, 0)
+        h.setSpacing(0)
+
+        # Signal name — left aligned, muted
+        name_lbl = QLabel(label)
+        name_lbl.setStyleSheet(
+            "color: #7a8fa6; font-size: 9pt; font-weight: 600;"
+            "border: none; background: transparent;"
+        )
+        h.addWidget(name_lbl, 3)
+
+        # Separator dot
+        sep = QLabel("·")
+        sep.setStyleSheet("color: #2e3a47; border: none; background: transparent;")
+        sep.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        h.addWidget(sep)
+
+        # Value — right aligned, bright and bold
+        val_lbl = QLabel("---")
+        val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        val_lbl.setStyleSheet(
+            f"color: {color}; font-size: 11pt; font-weight: 800;"
+            f"border: none; background: transparent;"
+        )
+        h.addWidget(val_lbl, 2)
+
+        # Unit — small, right side
+        unit_lbl = QLabel(f" {unit}")
+        unit_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        unit_lbl.setStyleSheet(
+            "color: #445060; font-size: 8pt;"
+            "border: none; background: transparent;"
+        )
+        unit_lbl.setFixedWidth(36)
+        h.addWidget(unit_lbl)
+
+        self.ui_labels[key] = val_lbl
+        return card
 
     def setup_traces_ui(self):
         layout = QVBoxLayout(self.traces_tab)
@@ -2848,17 +3051,24 @@ class TelemetryWindow(QMainWindow):
                 val = data_snapshot[key]
                 txt = f"{val:.2f}" if isinstance(val, float) else str(val)
                 label_widget.setText(txt)
-
                 last_rx = times_snapshot.get(key, 0)
-                
-                # Watchdog visual (2 seg)
+                color = self.color_assignment.get(key, "#00e676")
                 if (current_time - last_rx) < 2.0:
-                    label_widget.setStyleSheet("color: #00e676; font-weight: bold; font-size: 13px;") 
+                    label_widget.setStyleSheet(
+                        f"color: {color}; font-size: 11pt; font-weight: 800;"
+                        f"border: none; background: transparent;"
+                    )
                 else:
-                    label_widget.setStyleSheet("color: #ffb74d; font-weight: normal; font-size: 11px;") 
+                    label_widget.setStyleSheet(
+                        "color: #ffb74d; font-size: 11pt; font-weight: normal;"
+                        "border: none; background: transparent;"
+                    )
             else:
                 label_widget.setText("---")
-                label_widget.setStyleSheet("color: #444; font-weight: normal; font-size: 11px;")
+                label_widget.setStyleSheet(
+                    "color: #444; font-size: 11pt; font-weight: normal;"
+                    "border: none; background: transparent;"
+                )
 
         # Actualizar gráficas según la página activa
         if self.pages_stack.currentIndex() == 0:
