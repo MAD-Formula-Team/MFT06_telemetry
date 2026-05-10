@@ -1,0 +1,4 @@
+cantools
+pyserial
+pyqtgraph
+PyQt6

@@ -721,19 +721,19 @@ class TelemetryWindow(QMainWindow):
         navbar_layout.setSpacing(0)
         navbar_layout.setContentsMargins(0, 0, 0, 0)
         
-        self.nav_btn_dashboard = self.create_nav_button("DASHBOARD", 0, active=True)
-        navbar_layout.addWidget(self.nav_btn_dashboard)
+        #self.nav_btn_dashboard = self.create_nav_button("DASHBOARD", 0, active=True)
+        #navbar_layout.addWidget(self.nav_btn_dashboard)
 
-        self.nav_btn_todo = self.create_nav_button("TODO", 1)
+        self.nav_btn_todo = self.create_nav_button("TODO", 0, active=True)
         navbar_layout.addWidget(self.nav_btn_todo)
         
-        self.nav_btn_laptimer = self.create_nav_button("LAP TIMER", 2)
+        self.nav_btn_laptimer = self.create_nav_button("LAP TIMER", 1)
         navbar_layout.addWidget(self.nav_btn_laptimer)
         
-        self.nav_btn_monitor = self.create_nav_button("Monitor CAN", 3)
+        self.nav_btn_monitor = self.create_nav_button("Monitor CAN", 2)
         navbar_layout.addWidget(self.nav_btn_monitor)
         
-        self.nav_btn_offline = self.create_nav_button("OFFLINE", 4)
+        self.nav_btn_offline = self.create_nav_button("OFFLINE", 3)
         navbar_layout.addWidget(self.nav_btn_offline)
         
         navbar_layout.addStretch()
@@ -765,14 +765,11 @@ class TelemetryWindow(QMainWindow):
         self.ui_labels = {} 
         self.checkboxes = {} 
         self.plot_widgets = {}
-        self.dashboard_plot_widgets = {}
-        self.dashboard_metric_labels = {}
         self.color_assignment = {}
         
         self.data_store = TelemetryDataStore(max_points=10000)
         self.signal_catalog = self.load_dbc_signal_catalog()
         self.signals_by_group = self.group_signals_by_category(self.signal_catalog)
-        self.dashboard_critical_signals = self.select_dashboard_critical_signals()
         self.popup_enabled = False
         self.current_window_mode = 'sliding'
         self.current_window_duration = 15.0
@@ -792,10 +789,6 @@ class TelemetryWindow(QMainWindow):
         self.value_popup.setVisible(False)
         self.value_popup.setWordWrap(False)
         self.value_popup.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-
-        self.dashboard_tab = QWidget()
-        self.setup_dashboard_ui()
-        self.pages_stack.addWidget(self.dashboard_tab)
 
         self.todo_tab = QWidget()
         self.setup_todo_ui()
@@ -896,237 +889,6 @@ class TelemetryWindow(QMainWindow):
             return motor_signals[:3]
 
         return list(self.signal_catalog)[:3]
-
-    def setup_dashboard_ui(self):
-        layout = QHBoxLayout(self.dashboard_tab)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
-
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setHandleWidth(1)
-        splitter.setChildrenCollapsible(False)
-        layout.addWidget(splitter)
-
-        # --- COLUMNA 1: LAPTIME ---
-        laptime_panel = QWidget()
-        laptime_layout = QVBoxLayout(laptime_panel)
-        laptime_layout.setContentsMargins(6, 6, 6, 6)
-        laptime_layout.setSpacing(8)
-
-        laptime_group = QGroupBox("LAPTIME")
-        laptime_group_layout = QVBoxLayout(laptime_group)
-        laptime_group_layout.setContentsMargins(8, 8, 8, 8)
-        laptime_group_layout.setSpacing(8)
-
-        self.dashboard_session_mode_label = QLabel("SESION ACTUAL: --")
-        self.dashboard_session_mode_label.setStyleSheet("color: #ffd166; font-size: 12pt; font-weight: 700;")
-        laptime_group_layout.addWidget(self.dashboard_session_mode_label)
-
-        self.dashboard_session_state_label = QLabel("ESTADO: --")
-        self.dashboard_session_state_label.setStyleSheet("color: #dbe7f4; background-color: #1b2230; border: 1px solid #426084; border-radius: 0px; padding: 6px 10px; font-size: 10pt;")
-        laptime_group_layout.addWidget(self.dashboard_session_state_label)
-
-        self.dashboard_total_time_label = QLabel("00:00.000")
-        self.dashboard_total_time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dashboard_total_time_label.setStyleSheet("background-color: #0f172a; color: #7dd3fc; border: 2px solid #2563eb; border-radius: 0px; font-size: 28px; font-weight: 800; padding: 14px 12px;")
-        laptime_group_layout.addWidget(self.dashboard_total_time_label)
-
-        summary_row = QHBoxLayout()
-        summary_row.setSpacing(6)
-        self.dashboard_laps_count_label = QLabel("VUELTAS: 0")
-        self.dashboard_last_lap_label = QLabel("ULTIMA: --:--.---")
-        for label in [self.dashboard_laps_count_label, self.dashboard_last_lap_label]:
-            label.setStyleSheet("color: #f1f5f9; background-color: #252a35; border: 1px solid #3a3a3a; border-radius: 0px; padding: 6px 10px; font-size: 10pt;")
-            summary_row.addWidget(label)
-        laptime_group_layout.addLayout(summary_row)
-
-        self.dashboard_laps_table = QTableWidget(0, 4)
-        self.dashboard_laps_table.setHorizontalHeaderLabels(["VUELTA", "TIEMPO", "DELTA", "ESTADO"])
-        self.dashboard_laps_table.verticalHeader().setVisible(False)
-        self.dashboard_laps_table.setAlternatingRowColors(True)
-        self.dashboard_laps_table.setStyleSheet(
-            "QTableWidget {background-color: #11151c; color: #f8fafc; border: 1px solid #2f3746; gridline-color: #2f3746; font-size: 10pt;} "
-            "QHeaderView::section {background-color: #1f2937; color: #e6edf7; font-weight: 700; padding: 6px; border: 1px solid #2f3746;}"
-        )
-        dashboard_header = self.dashboard_laps_table.horizontalHeader()
-        dashboard_header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        dashboard_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        dashboard_header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        dashboard_header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        laptime_group_layout.addWidget(self.dashboard_laps_table, 1)
-
-        laptime_layout.addWidget(laptime_group)
-        splitter.addWidget(laptime_panel)
-
-        # --- COLUMNA 2: VARIABLES CRITICAS ---
-        metrics_panel = QWidget()
-        metrics_layout = QVBoxLayout(metrics_panel)
-        metrics_layout.setContentsMargins(6, 6, 6, 6)
-        metrics_layout.setSpacing(8)
-
-        metrics_group = QGroupBox("VARIABLES CRITICAS")
-        metrics_group_layout = QVBoxLayout(metrics_group)
-        metrics_group_layout.setContentsMargins(8, 8, 8, 8)
-        metrics_group_layout.setSpacing(8)
-
-        cards_grid = QGridLayout()
-        cards_grid.setHorizontalSpacing(8)
-        cards_grid.setVerticalSpacing(8)
-        cards = []
-        for idx, signal in enumerate(self.dashboard_critical_signals):
-            cards.append((signal["label"], signal["key"], signal["unit"], GRAPH_COLORS[idx % len(GRAPH_COLORS)]))
-
-        self.dashboard_metric_labels = {}
-        for index, (title_text, signal_key, unit_text, color) in enumerate(cards):
-            card = QFrame()
-            card.setMinimumSize(100, 110)
-            card.setStyleSheet(
-                f"QFrame {{ background-color: #171c24; border: 1px solid {color}; border-radius: 0px; }}"
-            )
-            card_layout = QVBoxLayout(card)
-            card_layout.setContentsMargins(10, 10, 10, 10)
-            card_layout.setSpacing(4)
-
-            card_title = QLabel(title_text)
-            card_title.setStyleSheet("color: #cbd5e1; font-size: 10pt; font-weight: 700;")
-            card_layout.addWidget(card_title)
-
-            card_value = QLabel("--")
-            card_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            card_value.setStyleSheet(f"color: {color}; font-size: 24px; font-weight: 800;")
-            card_layout.addWidget(card_value, 1)
-
-            card_unit = QLabel(unit_text)
-            card_unit.setAlignment(Qt.AlignmentFlag.AlignRight)
-            card_unit.setStyleSheet("color: #9fb3c8; font-size: 9pt;")
-            card_layout.addWidget(card_unit)
-
-            if signal_key is not None:
-                self.dashboard_metric_labels[signal_key] = card_value
-
-            row = index
-            col = 0
-            cards_grid.addWidget(card, row, col)
-
-        metrics_group_layout.addLayout(cards_grid)
-        metrics_group_layout.addStretch()
-        metrics_layout.addWidget(metrics_group)
-        splitter.addWidget(metrics_panel)
-
-        # --- COLUMNA 3: GRAFICAS ---
-        plots_panel = QWidget()
-        plots_layout = QVBoxLayout(plots_panel)
-        plots_layout.setContentsMargins(6, 6, 6, 6)
-        plots_layout.setSpacing(8)
-
-        plots_group = QGroupBox("GRAFICAS")
-        plots_group_layout = QVBoxLayout(plots_group)
-        plots_group_layout.setContentsMargins(8, 8, 8, 8)
-        plots_group_layout.setSpacing(8)
-
-        self.dashboard_plot_widgets = {}
-        dashboard_plots = []
-        for idx, signal in enumerate(self.dashboard_critical_signals):
-            dashboard_plots.append((
-                signal["key"],
-                signal["label"],
-                GRAPH_COLORS[idx % len(GRAPH_COLORS)],
-                signal.get("y_range"),
-            ))
-
-        for signal_name, display_name, color, y_range in dashboard_plots:
-            plot_widget = IndividualPlotWidget(
-                signal_name,
-                color,
-                self.data_store,
-                sliding_window=True,
-                window_duration=15.0,
-                display_name=display_name,
-                y_range=y_range,
-            )
-            plot_widget.setMinimumHeight(150)
-            plot_widget.setMaximumHeight(220)
-            self.dashboard_plot_widgets[signal_name] = plot_widget
-            plots_group_layout.addWidget(plot_widget)
-
-        plots_group_layout.addStretch()
-
-        self.dashboard_plots_scroll = QScrollArea()
-        self.dashboard_plots_scroll.setWidgetResizable(True)
-        self.dashboard_plots_scroll.setStyleSheet("QScrollArea { border: 1px solid #444; background-color: #1e1e1e; }")
-        self.dashboard_plots_container = QWidget()
-        self.dashboard_plots_container_layout = QVBoxLayout(self.dashboard_plots_container)
-        self.dashboard_plots_container_layout.setContentsMargins(0, 0, 0, 0)
-        self.dashboard_plots_container_layout.setSpacing(8)
-        self.dashboard_plots_container_layout.addWidget(plots_group)
-        self.dashboard_plots_container_layout.addStretch()
-        self.dashboard_plots_scroll.setWidget(self.dashboard_plots_container)
-        plots_layout.addWidget(self.dashboard_plots_scroll)
-        splitter.addWidget(plots_panel)
-
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 1)
-        splitter.setStretchFactor(2, 5)
-        splitter.setSizes([320, 160, 800])
-
-    def update_dashboard_view(self, data_snapshot, times_snapshot):
-        session_mode = self.session_mode.upper() if self.session_mode else "--"
-        if self.session_running and not self.session_paused:
-            state_text = "EN CURSO"
-        elif self.session_paused:
-            state_text = "EN PAUSA"
-        elif self.session_laps:
-            state_text = "DETENIDO"
-        else:
-            state_text = "LISTO"
-
-        self.dashboard_session_mode_label.setText(f"SESION ACTUAL: {session_mode}")
-        self.dashboard_session_state_label.setText(f"ESTADO: {state_text}")
-
-        stopwatch_s = self.get_laptimer_stopwatch_seconds()
-        self.dashboard_total_time_label.setText(self.format_lap_time(stopwatch_s))
-        self.dashboard_laps_count_label.setText(f"VUELTAS: {len(self.session_laps)}")
-        last_lap = self.session_laps[-1] if self.session_laps else None
-        self.dashboard_last_lap_label.setText(f"ULTIMA: {self.format_lap_time(last_lap)}" if last_lap is not None else "ULTIMA: --:--.---")
-
-        best_lap = min(self.session_laps) if self.session_laps else None
-        table = self.dashboard_laps_table
-        table.setRowCount(len(self.session_laps))
-        for idx, lap_time in enumerate(self.session_laps):
-            delta = 0.0 if best_lap is None else lap_time - best_lap
-            if best_lap is not None and abs(delta) < 1e-9:
-                state = "BEST"
-            elif idx == len(self.session_laps) - 1:
-                state = "LAST"
-            else:
-                state = ""
-
-            values = [
-                str(idx + 1),
-                self.format_lap_time(lap_time),
-                f"+{delta:.3f}s" if delta > 0 else "0.000s",
-                state,
-            ]
-            for col, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                table.setItem(idx, col, item)
-
-        if not self.session_laps:
-            table.setRowCount(0)
-
-        for signal_name, label_widget in self.dashboard_metric_labels.items():
-            if signal_name not in data_snapshot:
-                label_widget.setText("--")
-                continue
-
-            value = data_snapshot[signal_name]
-            if isinstance(value, float):
-                label_widget.setText(f"{value:.2f}")
-            else:
-                label_widget.setText(str(value))
-
-        for plot_widget in self.dashboard_plot_widgets.values():
-            plot_widget.update_plot()
 
     def setup_todo_ui(self):
         # Splitter principal: PANEL CONTROL | GRÁFICAS
@@ -1951,15 +1713,12 @@ class TelemetryWindow(QMainWindow):
             print("[UI] Popup de valores desactivado (F2)")
     
     def switch_page(self, page_index):
-        """Cambia la página activa y actualiza estilo navbar"""
         self.pages_stack.setCurrentIndex(page_index)
-        
-        # Restablecer todos los botones a estado inactivo
-        for btn in [self.nav_btn_dashboard, self.nav_btn_todo, self.nav_btn_laptimer, self.nav_btn_monitor, self.nav_btn_offline]:
+
+        for btn in [self.nav_btn_todo, self.nav_btn_laptimer, self.nav_btn_monitor, self.nav_btn_offline]:
             btn.setStyleSheet(nav_button_style(False))
-        
-        # Activar el botón seleccionado
-        buttons = [self.nav_btn_dashboard, self.nav_btn_todo, self.nav_btn_laptimer, self.nav_btn_monitor, self.nav_btn_offline]
+
+        buttons = [self.nav_btn_todo, self.nav_btn_laptimer, self.nav_btn_monitor, self.nav_btn_offline]
         if page_index < len(buttons):
             buttons[page_index].setStyleSheet(nav_button_style(True))
     
@@ -2797,7 +2556,7 @@ class TelemetryWindow(QMainWindow):
             self.offline_checkboxes.clear()
             
             # Cambiar al tab de análisis offline
-            self.pages_stack.setCurrentIndex(4)
+            self.pages_stack.setCurrentIndex(3)
             self.offline_right_tabs.setCurrentIndex(0)
 
             unified_rows = self.parse_unified_laptime_rows_from_csv(filename)
@@ -2882,9 +2641,9 @@ class TelemetryWindow(QMainWindow):
                 self.offline_session_selector.addItem(f"{idx}. {sess['name']} ({sess['mode']})")
             self.offline_session_selector.blockSignals(False)
 
-            self.pages_stack.setCurrentIndex(4)
+            self.pages_stack.setCurrentIndex(3)
             if self.offline_loaded_sessions:
-                self.offline_session_selector.setCurrentIndex(1)
+                self.offline_session_selector.setCurrentIndex(0)
             else:
                 self.offline_session_laps_table.setRowCount(0)
                 self.offline_session_plot.clear()
@@ -3072,7 +2831,7 @@ class TelemetryWindow(QMainWindow):
         self.status_label.setStyleSheet(status_label_style(bg_color))
 
     def append_trace(self, text):
-        if self.pages_stack.currentIndex() == 3:
+        if self.pages_stack.currentIndex() == 2:
             self.trace_console.appendPlainText(text)
 
     def update_ui_tick(self):
@@ -3103,8 +2862,6 @@ class TelemetryWindow(QMainWindow):
 
         # Actualizar gráficas según la página activa
         if self.pages_stack.currentIndex() == 0:
-            self.update_dashboard_view(data_snapshot, times_snapshot)
-        elif self.pages_stack.currentIndex() == 1:
             for plot_widget in self.plot_widgets.values():
                 plot_widget.update_plot()
 
