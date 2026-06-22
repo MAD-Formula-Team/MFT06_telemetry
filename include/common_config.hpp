@@ -1,12 +1,13 @@
 #ifndef COMMON_CONFIG_H
 #define COMMON_CONFIG_H
 
+#include <mcp_can.h>
 #include <Arduino.h>
 
 // ================================================================
 // LOGGING — comentar para deshabilitar en producción (sin USB)
 // ================================================================
-#define SERIAL_LOGGING_ENABLED // comentar linea para quitar logging
+#define SERIAL_LOGGING_ENABLED
 
 #ifdef SERIAL_LOGGING_ENABLED
   #define LOG(...)  Serial.print(__VA_ARGS__)
@@ -18,6 +19,8 @@
   #define LOGL(...) do {} while(0)
 #endif
 
+// #define HB_CHECK_ENABLED
+// #define FUEL_CONSUMPTION_CALC
 // ================================================================
 // PINES LoRa
 // ================================================================
@@ -47,6 +50,8 @@
 #define CAN_SCK 36
 #define CAN_MISO 33
 #define CAN_MOSI 35
+
+#define CAN_SPEED CAN_500KBPS
 
 // ================================================================
 // PINES OLED
@@ -100,7 +105,7 @@ namespace lora_timing {
     // ── Constantes derivadas de los #define ───────────────────────
     constexpr uint32_t DE = (LORA_SF >= 11 && LORA_BW_KHZ <= 125u) ? 1u : 0u;
 
-    constexpr uint32_t CR_CODE = (uint32_t) LORA_CR - 4u; // 7→3
+    constexpr uint32_t CR_CODE = static_cast<uint32_t>(LORA_CR) - 4u; // 7→3
 
     // ── Período de símbolo ─────────────────────────────────────────
     // T_sym_µs = (2^SF × 1000) / BW_kHz
@@ -111,16 +116,16 @@ namespace lora_timing {
     // T_pre = (n_pre + 4.25) × T_sym
     // Se multiplica ×4 para eliminar el 0.25 fraccionario:
     //   (4·n_pre + 17) × T_sym / 4
-    constexpr uint32_t T_PRE_US = ((4u * (uint32_t) LORA_PREAMBLE + 17u) * T_SYM_US) / 4u;
+    constexpr uint32_t T_PRE_US = ((4u * static_cast<uint32_t>(LORA_PREAMBLE) + 17u) * T_SYM_US) / 4u;
 
     // ── Símbolos de payload ────────────────────────────────────────
     constexpr int PL = (int) sizeof(TelemetryPacket); // 15
     constexpr int _NUM = 8 * PL - 4 * LORA_SF + 28 + 16 - 0; // CRC=1, IH=0
-    constexpr int _DEN = 4 * (LORA_SF - 2 * (int) DE);
+    constexpr int _DEN = 4 * (LORA_SF - 2 * static_cast<int>(DE));
     constexpr int _CEIL = (_NUM > 0) ? ((_NUM + _DEN - 1) / _DEN) : 0;
 
     // n_pay = 8 + ⌈…⌉ × (4 + CR_code)
-    constexpr uint32_t N_PAY_SYM = 8u + (uint32_t) (_CEIL * (4 + (int) CR_CODE));
+    constexpr uint32_t N_PAY_SYM = 8u + static_cast<uint32_t>(_CEIL * (4 + static_cast<int>(CR_CODE)));
 
     // ── Tiempos finales ────────────────────────────────────────────
     constexpr uint32_t T_PAY_US = N_PAY_SYM * T_SYM_US;

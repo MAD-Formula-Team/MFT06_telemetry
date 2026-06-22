@@ -3,7 +3,7 @@
 #include <RadioLib.h>
 #include <Wire.h>
 #include <SSD1306Wire.h>
-#include "common_config.h"
+#include "common_config.hpp"
 
 #if defined(ESP8266) || defined(ESP32)
   ICACHE_RAM_ATTR
