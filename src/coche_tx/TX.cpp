@@ -130,8 +130,9 @@ void taskLoRa(void *pvParameters) {
         const uint32_t now_ms = millis();
         if (now_ms - lastLog > 10000u) {
             lastLog = now_ms;
-            uint32_t dc = (uint32_t) statSent * lora_timing::TOA_MS / (now_ms / 1000u);
-            LOGF("[LORA] tx=%u | rate_drop=%u | DC=%u.%u%%\n", statSent, statRateDrop, dc / 10u,
+            uint32_t secs = now_ms / 1000u;
+            uint32_t dc = (secs > 0) ? ((uint32_t) statSent * lora_timing::TOA_MS / secs) : 0u;
+            LOGF("[LORA] tx=%u | rate_drop=%u | skip=%u | DC=%u.%u%%\n", statSent, statRateDrop, statSkipId, dc / 10u,
                  dc % 10u);
         }
 #endif
