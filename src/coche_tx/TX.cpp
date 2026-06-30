@@ -166,7 +166,7 @@ void setup() {
     SPI.begin(CAN_SCK, CAN_MISO, CAN_MOSI, CAN_CS);
     int err = CAN0.begin(MCP_ANY, CAN_SPEED, MCP_8MHZ);
     if (err == CAN_OK) {
-        CAN0.setMode(MCP_NORMAL);
+        CAN0.setMode(MCP_LISTENONLY);
         LOGL("[CAN] INIT OK");
     }
     else {
