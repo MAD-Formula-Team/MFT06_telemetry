@@ -29,6 +29,7 @@ static uint32_t fuelLastMs = 0;
 
 static volatile uint32_t statSent = 0;
 static volatile uint32_t statRateDrop = 0;
+static volatile uint32_t statSkipId = 0;
 static volatile uint32_t statMutexErr = 0;
 static volatile uint32_t seqNum = 0;
 
@@ -60,21 +61,6 @@ static int selectBest() {
 }
 
 void taskLoRa(void *pvParameters) {
-    loraSPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_NSS);
-
-    const int state = radio.begin(LORA_BAND, LORA_BW, LORA_SF, LORA_CR, 0x12, LORA_POWER);
-
-    radio.setDio1Action(setFlag);
-
-    if (state != RADIOLIB_ERR_NONE) {
-        LOGF("[LORA - ERROR] INIT ERROR: %d\n", state);
-        vTaskDelete(nullptr);
-        return;
-    }
-
-    xSemaphoreGive(txReadySem);
-    LOGF("[LoRa] OK — ToA=%ums TX_interval=%ums DC=%u%%\n", lora_timing::TOA_MS, lora_timing::TX_INTERVAL_MS,
-         lora_timing::DUTY_CYCLE_PERCENT);
     uint32_t lastTxStart = 0, lastLog = 0, lastHbCheck = 0;
 
     while (true) {
@@ -83,7 +69,7 @@ void taskLoRa(void *pvParameters) {
 
         if (xSemaphoreTake(pendingMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
             const int current_can_id = selectBest();
-            if (current_can_id >= 0) {
+            if (current_can_id >= 0 && lvPending[current_can_id]) {
                 telemetry_packet = lvBuf[current_can_id];
                 lvPending[current_can_id] = false;
                 got_packet = true;
@@ -163,6 +149,21 @@ void setup() {
     }
 #endif
 
+    // Inicializar LoRa y CAN secuencialmente, en el mismo core y antes de crear
+    // ninguna tarea: instalar dos buses SPI en paralelo desde cores distintos
+    // (uno ya en transacciones activas) corrompe el driver SPI y provoca un
+    // Guru Meditation (LoadProhibited) dentro de beginTransaction().
+    loraSPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_NSS);
+    const int lora_state = radio.begin(LORA_BAND, LORA_BW, LORA_SF, LORA_CR, 0x12, LORA_POWER);
+    radio.setDio1Action(setFlag);
+    if (lora_state != RADIOLIB_ERR_NONE) {
+        LOGF("[LORA - ERROR] INIT ERROR: %d\n", lora_state);
+        while (true);
+    }
+    xSemaphoreGive(txReadySem);
+    LOGF("[LoRa] OK — ToA=%ums TX_interval=%ums DC=%u%%\n", lora_timing::TOA_MS, lora_timing::TX_INTERVAL_MS,
+         lora_timing::DUTY_CYCLE_PERCENT);
+
     SPI.begin(CAN_SCK, CAN_MISO, CAN_MOSI, CAN_CS);
     int err = CAN0.begin(MCP_ANY, CAN_SPEED, MCP_8MHZ);
     if (err == CAN_OK) {
@@ -181,6 +182,10 @@ void setup() {
 
 void loop() {
     if (CAN0.checkReceive() != CAN_MSGAVAIL) {
+        // Ceder CPU: sin esto, con el bus CAN inactivo loop() gira sin bloquear
+        // nunca en el core de Arduino, la tarea IDLE de ese core no llega a
+        // ejecutarse y el Task Watchdog acaba reiniciando la placa.
+        vTaskDelay(pdMS_TO_TICKS(1));
         return;
     }
 
@@ -199,6 +204,7 @@ void loop() {
 
     const int current_can_id = canFilterFind(rxId);
     if (current_can_id < 0) {
+        statSkipId++;
         return;
     }
 

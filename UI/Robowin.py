@@ -29,7 +29,7 @@ from ui_theme import (
 CAN_BITRATE = 1000000
 # Ruta del DBC relativa al script
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DBC_FILE = os.path.join(SCRIPT_DIR, "mft04.dbc")
+DBC_FILE = os.path.join(SCRIPT_DIR, "mft06.dbc")
 CAN_INTERFACE_TYPE = 'robotell' 
 REFRESH_RATE_MS = 50  # Refresco más fluido para cronómetro y tablas (20 FPS)
 LAPTIMER_CAN_ID = 0x777
