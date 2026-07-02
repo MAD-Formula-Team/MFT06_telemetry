@@ -78,12 +78,14 @@ void taskLoRa(void *pvParameters) {
         }
 
         if (got_packet) {
+#ifndef LORA_UNTHROTTLED_MODE
             { // Check duty cycle
                 const uint32_t elapsed = millis() - lastTxStart;
                 if (elapsed < lora_timing::TX_INTERVAL_MS) {
                     vTaskDelay(pdMS_TO_TICKS(lora_timing::TX_INTERVAL_MS - elapsed));
                 }
             }
+#endif
 
             if (xSemaphoreTake(txReadySem, pdMS_TO_TICKS(lora_timing::TX_INTERVAL_MS + lora_timing::TOA_MS + 50u)) ==
                 pdTRUE) {
@@ -226,7 +228,11 @@ void loop() {
     }
 #endif
 
+#ifdef LORA_UNTHROTTLED_MODE
+    const bool rate_ok = true;
+#else
     const bool rate_ok = ((now - lastQueuedMs[current_can_id]) >= (CAN_FILTER_TABLE[current_can_id].minIntervalMs));
+#endif
 #ifdef SERIAL_LOGGING_ENABLED
     if (!rate_ok) {
         statRateDrop++;

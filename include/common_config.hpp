@@ -21,6 +21,16 @@
 
 // #define HB_CHECK_ENABLED
 // #define FUEL_CONSUMPTION_CALC
+
+// ================================================================
+// MODO SIN LIMITES — SOLO BANCO/CABLE, NUNCA EN AIRE
+// Descomentar para desactivar el rate-limit por ID (minIntervalMs de
+// CAN_FILTER_TABLE) y el ritmo de duty cycle de LoRa (TX_INTERVAL_MS),
+// para medir en banco cuantos datos llegan/caben sin throttling artificial.
+// El duty cycle existe por normativa de la sub-banda RF: con esto activo
+// y transmitiendo por el aire de verdad se incumple la regulacion.
+// ================================================================
+#define LORA_UNTHROTTLED_MODE
 // ================================================================
 // PINES LoRa
 // ================================================================
