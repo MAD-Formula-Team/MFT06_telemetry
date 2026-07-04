@@ -98,6 +98,12 @@ if "pyqtgraph" not in sys.modules:
         def addItem(self, *_args, **_kwargs):
             return None
 
+        def removeItem(self, *_args, **_kwargs):
+            return None
+
+        def setXLink(self, *_args, **_kwargs):
+            return None
+
         def scene(self):
             return self._scene
 
@@ -137,13 +143,36 @@ if "pyqtgraph" not in sys.modules:
         def __init__(self, *_args, **_kwargs):
             return None
 
+    class AxisItem:
+        def __init__(self, *_args, **_kwargs):
+            return None
+
+    class LinearRegionItem:
+        def __init__(self, *_args, **_kwargs):
+            return None
+
+        def setRegion(self, *_args, **_kwargs):
+            return None
+
+        def setVisible(self, *_args, **_kwargs):
+            return None
+
+        def setZValue(self, *_args, **_kwargs):
+            return None
+
     def mkPen(*_args, **_kwargs):
+        return None
+
+    def mkBrush(*_args, **_kwargs):
         return None
 
     fake_pg.PlotWidget = PlotWidget
     fake_pg.InfiniteLine = InfiniteLine
     fake_pg.SignalProxy = SignalProxy
+    fake_pg.LinearRegionItem = LinearRegionItem
+    fake_pg.AxisItem = AxisItem
     fake_pg.mkPen = mkPen
+    fake_pg.mkBrush = mkBrush
     sys.modules["pyqtgraph"] = fake_pg
 
 import Robowin
@@ -234,6 +263,130 @@ class TestTelemetryUIBasic(unittest.TestCase):
         self.assertGreaterEqual(self.window.offline_session_selector.count(), 2)
         self.assertEqual(self.window.offline_session_selector.currentIndex(), 1)
         self.assertEqual(self.window.offline_session_laps_table.rowCount(), 2)
+
+    def test_load_from_csv_combined_format(self):
+        """El CSV combinado (telemetría + columnas laptime de texto) debe
+        recargarse sin perder filas ni registrar las columnas laptime como señales."""
+        import tempfile
+
+        store = Robowin.TelemetryDataStore()
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".csv", delete=False, newline=""
+        ) as f:
+            f.write("timestamp,engine_rpm,ect,name,mode,lap_number,lap_time_s,lap_time_fmt,state\n")
+            f.write("1.000,5000,80,,,,,,\n")
+            f.write("2.000,5500,81,TEST,SKIDPAD,1,10.5,00:10.500,BEST\n")
+            path = f.name
+
+        try:
+            ok, _msg, num_signals, num_rows = store.load_from_csv(path)
+        finally:
+            os.unlink(path)
+
+        self.assertTrue(ok)
+        self.assertEqual(num_rows, 2)
+        self.assertEqual(num_signals, 2)
+        self.assertEqual(sorted(store.get_all_signals()), ["ect", "engine_rpm"])
+        _t, values = store.get_signal_data("engine_rpm")
+        self.assertEqual(values, [5000.0, 5500.0])
+
+    def test_history_table_has_total_column(self):
+        headers = [
+            self.window.laptimer_history_table.horizontalHeaderItem(i).text()
+            for i in range(self.window.laptimer_history_table.columnCount())
+        ]
+        self.assertIn("TOTAL", headers)
+
+    def test_offline_signal_checkboxes_and_lap_focus(self):
+        """Cargar señales offline debe crear checkboxes, auto-activar gráficas
+        y permitir enfocar la telemetría de una vuelta sin errores."""
+        w = self.window
+        w.data_store.clear()
+        w.data_store.add_sample("engine_rpm", 5000, timestamp=1.0)
+        w.data_store.add_sample("engine_rpm", 6000, timestamp=2.0)
+        w.data_store.add_sample("ect", 80, timestamp=1.0)
+        w.offline_unified_laptime_rows = [
+            {"timestamp": 2.0, "lap_number": 1, "lap_time_s": 1.0}
+        ]
+
+        w.populate_offline_signal_checkboxes()
+
+        self.assertEqual(sorted(w.offline_checkboxes), ["ect", "engine_rpm"])
+        # Auto-check: señales con datos distintos de cero generan gráfica
+        self.assertGreaterEqual(len(w.offline_plot_widgets), 1)
+
+        w.focus_offline_lap({"timestamp": 2.0, "lap_time_s": 1.0}, switch_tab=True)
+        self.assertEqual(w.offline_right_tabs.currentIndex(), 0)
+
+    def test_theme_toggle_switches_palette(self):
+        """El botón de tema debe alternar oscuro/claro y reaplicar estilos."""
+        import ui_theme
+
+        ui_theme.set_theme("dark")
+        self.window.apply_theme()
+        self.assertIn("#1a1a19", self.window.styleSheet())
+        self.assertEqual(self.window.theme_toggle_btn.text(), "MODO CLARO")
+
+        self.window.toggle_theme_mode()
+        self.assertFalse(ui_theme.is_dark())
+        self.assertIn("#ebebeb", self.window.styleSheet())
+        self.assertEqual(self.window.theme_toggle_btn.text(), "MODO OSCURO")
+
+        self.window.toggle_theme_mode()
+        self.assertTrue(ui_theme.is_dark())
+
+    def test_signal_cards_follow_active_graphs(self):
+        """Activar una señal en SEÑALES crea su tarjeta de valor; desactivarla la quita."""
+        w = self.window
+        key = "test_signal"
+        w.color_assignment[key] = "#1c93d8"
+
+        w.toggle_graph(key, True)
+        self.assertIn(key, w.signal_cards)
+        self.assertIn(key, w.signal_card_value_labels)
+
+        w.toggle_graph(key, False)
+        self.assertNotIn(key, w.signal_cards)
+        self.assertNotIn(key, w.signal_card_value_labels)
+
+    def test_offline_signal_search_filters_checkboxes(self):
+        """El buscador de señales offline oculta las que no coinciden."""
+        w = self.window
+        w.data_store.clear()
+        w.data_store.add_sample("engine_rpm", 1.0, timestamp=0.1)
+        w.data_store.add_sample("ect", 2.0, timestamp=0.1)
+        w.populate_offline_signal_checkboxes()
+
+        w.offline_signal_search.setText("rpm")
+        self.assertTrue(w.offline_checkboxes["ect"].isHidden())
+        self.assertFalse(w.offline_checkboxes["engine_rpm"].isHidden())
+
+        w.offline_signal_search.setText("")
+        self.assertFalse(w.offline_checkboxes["ect"].isHidden())
+        self.assertFalse(w.offline_checkboxes["engine_rpm"].isHidden())
+
+    def test_skidpad_history_total_uses_fs_time(self):
+        """En skidpad, la columna TOTAL del historial debe mostrar el tiempo FS:
+        media de la mejor vuelta derecha (1-2) y la mejor izquierda (3-4)."""
+        w = self.window
+        w.session_mode = "Skidpad"
+        w.session_laps = [10.0, 11.0, 12.0, 9.0]
+
+        summary = w.build_laptimer_summary(42.0)
+        expected_fs = w.format_lap_time((10.0 + 9.0) / 2.0)  # 00:09.500
+        self.assertEqual(summary["skidpad_time"], expected_fs)
+
+        w.append_session_history(summary)
+        row = w.laptimer_history_table.rowCount() - 1
+        self.assertEqual(w.laptimer_history_table.item(row, 6).text(), expected_fs)
+
+    def test_pause_before_first_trigger_does_not_crash(self):
+        self.window.start_session()
+        self.window.toggle_pause_session()  # antes: TypeError por started_at None
+        self.assertTrue(self.window.session_paused)
+        self.window.toggle_pause_session()
+        self.assertFalse(self.window.session_paused)
+        self.assertIsNone(self.window.session_started_at)
 
 
 if __name__ == "__main__":
