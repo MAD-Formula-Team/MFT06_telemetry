@@ -32,6 +32,10 @@ DBC_FILE = os.path.join(SCRIPT_DIR, "mft06.dbc")
 if not os.path.exists(DBC_FILE):
     DBC_FILE = os.path.join(BUNDLE_DIR, "mft06.dbc")
 LAPTIMER_CAN_ID = 0x777
+# Vuelta mínima plausible: el sensor IR del laptimer emite dos pulsos por
+# pasada del coche; cualquier "vuelta" más corta que esto es el segundo pulso
+# de la misma pasada y se descarta sin mover la referencia de tiempo.
+LAPTIMER_MIN_LAP_S = 3.0
 # Trazas [DEBUG] por cada frame CAN: desactivadas por defecto porque imprimir en
 # el bucle de lectura serie retrasa la lectura y puede perder frames a alta carga.
 DEBUG_CAN = False
@@ -43,12 +47,6 @@ LAPTIME_CSV_COLUMNS = [
     'last', 'consistency_ms', 'lap_number', 'lap_time_s', 'lap_time_fmt',
     'delta_s', 'delta_fmt', 'state'
 ]
-
-
-def list_ports_info():
-    """Lista [(dispositivo, descripción)] de los puertos serie disponibles."""
-    return [(p.device, p.description or '') for p in serial.tools.list_ports.comports()]
-
 # --- DataStore: Almacén persistente de telemetría ---
 class TelemetryDataStore:
     """Almacena todos los datos de telemetría con timestamps relativos"""
@@ -191,12 +189,6 @@ class CanWorker(QThread):
     connection_status = pyqtSignal(str, str)
     new_trace = pyqtSignal(str)
 
-    # Watchdog: si un puerto abre pero no entrega ningún frame válido en este
-    # tiempo, en modo AUTO se pasa al siguiente puerto (evita quedarse
-    # enganchado a puertos Bluetooth virtuales o COM de placa base vacíos).
-    NO_DATA_TIMEOUT_S = 5.0
-    PORT_COOLDOWN_S = 30.0
-
     def __init__(self, data_store):
         super().__init__()
         self.running = True
@@ -209,13 +201,6 @@ class CanWorker(QThread):
         self.last_laptimer_timestamp_us = None
         self.laptimer_best_lap_s = None
         self.laptimer_lap_count = 0
-        # Selección de puerto y watchdog de datos
-        self.manual_port = None          # None = modo AUTO
-        self.reconnect_requested = False
-        self.current_port = None
-        self.connected_at = 0.0
-        self.frames_since_connect = 0
-        self.port_cooldown = {}          # puerto -> instante del último 'sin datos'
 
         try:
             print(f"[DBC] Intentando cargar: {DBC_FILE}")
@@ -230,42 +215,32 @@ class CanWorker(QThread):
             traceback.print_exc()
 
     def get_available_ports(self):
-        """Puertos ordenados por probabilidad de ser el receptor de telemetría.
+        ports = serial.tools.list_ports.comports()
+        port_list = [port.device for port in ports]
 
-        Prioriza adaptadores USB-serie reales (tienen VID USB), relega los
-        puertos Bluetooth virtuales y aplica un cooldown a los puertos que
-        abrieron pero no entregaron datos hace poco.
-        """
-        now = time.time()
-        infos = serial.tools.list_ports.comports()
+        # Priorizar USB0 y USB1 (común en Linux)
+        priority_ports = []
+        other_ports = []
 
-        def score(info):
-            desc = f"{info.description or ''} {info.manufacturer or ''}".lower()
-            if 'bluetooth' in desc:
-                return 3
-            if getattr(info, 'vid', None):
-                return 0  # dispositivo USB real (CP210x, CH340, FTDI...)
-            return 2
+        for port in port_list:
+            if 'USB0' in port or 'USB1' in port or 'COM0' in port or 'COM1' in port:
+                priority_ports.append(port)
+            else:
+                other_ports.append(port)
 
-        ordered = [info.device for info in sorted(infos, key=score)]
+        # Ordenar priority_ports para que USB0/COM0 esté primero
+        priority_ports.sort()
 
-        # Saltar puertos castigados por no dar datos; si todos lo están, reintentarlos
-        available = [p for p in ordered if now - self.port_cooldown.get(p, 0) > self.PORT_COOLDOWN_S]
-        return available if available else ordered
-
-    def set_manual_port(self, port):
-        """Fija un puerto concreto (None = AUTO) y fuerza la reconexión."""
-        self.manual_port = port
-        self.port_cooldown.clear()
-        self.reconnect_requested = True
+        # Retornar primero los prioritarios, luego el resto
+        return priority_ports + other_ports
 
     def connect_to_port(self, port):
         try:
             # LÓGICA ROBOWIN: Conexión Serial Pura
-            # DTR=False intenta evitar el reinicio en algunas placas, 
+            # DTR=False intenta evitar el reinicio en algunas placas,
             # pero si reinicia, el timeout nos protege.
             ser = serial.Serial(port, 1000000, timeout=0.1)
-            ser.dtr = False 
+            ser.dtr = False
             ser.rts = False
             return ser
         except Exception as e:
@@ -288,6 +263,12 @@ class CanWorker(QThread):
             return {}
 
         lap_time_s = (timestamp_us - self.last_laptimer_timestamp_us) / 1_000_000.0
+        if lap_time_s < LAPTIMER_MIN_LAP_S:
+            # Segundo pulso del sensor IR en la misma pasada: ignorar SIN
+            # actualizar la referencia (la vuelta se mide de primer pulso
+            # a primer pulso).
+            return {}
+
         self.last_laptimer_timestamp_us = timestamp_us
         self.laptimer_lap_count += 1
 
@@ -303,58 +284,26 @@ class CanWorker(QThread):
 
     def run(self):
         while self.running:
-            if self.reconnect_requested:
-                self.reconnect_requested = False
-                if self.serial:
-                    try:
-                        self.serial.close()
-                    except Exception:
-                        pass
-                    self.serial = None
-
             if self.serial is None:
                 self.connection_status.emit("Escaneando puertos...", "orange")
-                if self.manual_port:
-                    candidates = [self.manual_port]
-                else:
-                    candidates = self.get_available_ports()
-                if not candidates:
+                ports = self.get_available_ports()
+                if not ports:
                     self.connection_status.emit("No se detectan puertos COM", "red")
                     time.sleep(1)
                     continue
 
-                for port in candidates:
+                for port in ports:
                     self.connection_status.emit(f"Probando {port}...", "orange")
                     new_ser = self.connect_to_port(port)
                     if new_ser:
                         self.serial = new_ser
-                        self.current_port = port
-                        self.connected_at = time.time()
-                        self.frames_since_connect = 0
-                        self.connection_status.emit(f"{port}: esperando datos...", "orange")
+                        self.connection_status.emit(f"CONECTADO: {port} (Raw Serial)", "green")
                         break
                     time.sleep(0.1)
-                if self.serial is None:
-                    time.sleep(1)
+                if self.serial is None: time.sleep(1)
 
             else:
                 try:
-                    # Watchdog: puerto abierto pero sin ningún frame válido aún
-                    if self.frames_since_connect == 0 and (time.time() - self.connected_at) > self.NO_DATA_TIMEOUT_S:
-                        if self.manual_port:
-                            # Puerto fijado por el usuario: avisar pero no saltar
-                            self.connection_status.emit(f"SIN DATOS en {self.current_port}", "orange")
-                            self.connected_at = time.time()
-                        else:
-                            self.connection_status.emit(f"Sin datos en {self.current_port}, probando otro puerto...", "orange")
-                            self.port_cooldown[self.current_port] = time.time()
-                            try:
-                                self.serial.close()
-                            except Exception:
-                                pass
-                            self.serial = None
-                            continue
-
                     # LÓGICA CSV: Leer línea a línea
                     if self.serial.in_waiting:
                         # Leemos hasta el salto de línea '\n' (formato CSV)
@@ -375,12 +324,6 @@ class CanWorker(QThread):
                             
                             # Resto: datos en hex
                             data_bytes = bytes([int(b, 16) for b in parts[1:]])
-
-                            # Primer frame válido: confirmar conexión en verde
-                            if self.frames_since_connect == 0:
-                                self.connection_status.emit(f"CONECTADO: {self.current_port}", "green")
-                            self.frames_since_connect += 1
-
                             # --- A PARTIR DE AQUÍ, ES IGUAL QUE ANTES ---
                             current_time = time.time()
                             timestamp = time.strftime('%H:%M:%S')

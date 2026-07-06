@@ -380,6 +380,33 @@ class TestTelemetryUIBasic(unittest.TestCase):
         row = w.laptimer_history_table.rowCount() - 1
         self.assertEqual(w.laptimer_history_table.item(row, 6).text(), expected_fs)
 
+    def test_double_ir_pulse_counts_single_lap(self):
+        """El doble pulso del sensor IR por pasada debe contar UNA vuelta,
+        medida de primer pulso a primer pulso."""
+        w = self.window
+        w.start_session()
+        # Pasadas en t=100, t=110 y t=120 (device time, s); cada una con un
+        # pulso fantasma 0.4 s después del real.
+        for ts in [100.0, 100.4, 110.0, 110.4, 120.0, 120.4]:
+            w.data_store.add_sample("laptimer_timestamp_s", ts)
+
+        w.consume_laptimer_timestamps()
+        self.assertEqual(w.session_laps, [10.0, 10.0])
+
+    def test_backend_laptimer_filters_ghost_pulse(self):
+        """process_laptimer_packet ignora vueltas más cortas que el mínimo."""
+        worker = Robowin.CanWorker(Robowin.TelemetryDataStore())
+
+        def pkt(us):
+            return worker.process_laptimer_packet(int(us).to_bytes(8, "little"))
+
+        pkt(1_000_000)                 # primer pulso: referencia
+        ghost = pkt(1_400_000)         # pulso fantasma 0.4 s después
+        self.assertEqual(ghost, {})
+        real = pkt(11_000_000)         # vuelta real: 10 s desde el primero
+        self.assertEqual(real.get("laptimer_last_lap_s"), 10.0)
+        self.assertEqual(real.get("laptimer_laps"), 1)
+
     def test_pause_before_first_trigger_does_not_crash(self):
         self.window.start_session()
         self.window.toggle_pause_session()  # antes: TypeError por started_at None

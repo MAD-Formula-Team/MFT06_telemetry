@@ -12,7 +12,12 @@
 // GPIO47 para entrada dedicada del laptimer.
 constexpr uint8_t LAPTIMER_TRIGGER_PIN = 47;
 constexpr uint8_t LAPTIMER_TRIGGER_ACTIVE_LEVEL = LOW;
-constexpr uint16_t TRIGGER_DEBOUNCE_MS = 50;
+// El sensor IR emite DOS pulsos en cada pasada del coche (reflejo del frontal
+// y de la cola). Tras aceptar un trigger se ignora todo pulso durante el
+// lockout: mucho mayor que la separación entre ambos pulsos (<1 s) y mucho
+// menor que la vuelta más corta posible (skidpad ~4.5 s). Así cada pasada
+// cuenta una sola vez y la vuelta se mide de primer pulso a primer pulso.
+constexpr uint32_t TRIGGER_LOCKOUT_MS = 1000;
 
 QueueHandle_t colaLoRa;
 #define COLA_SIZE 32
@@ -128,14 +133,16 @@ void loop() {
   triggerPendiente = false;
 
   uint32_t now = millis();
-  if((now - ultimoTriggerMs) < TRIGGER_DEBOUNCE_MS) {
+  // Lockout anti doble-pulso: solo cuenta desde triggers ACEPTADOS, por lo
+  // que el segundo pulso de la misma pasada nunca rearma la ventana.
+  if(triggersAceptados > 0 && (now - ultimoTriggerMs) < TRIGGER_LOCKOUT_MS) {
     return;
   }
-  ultimoTriggerMs = now;
 
   if(digitalRead(LAPTIMER_TRIGGER_PIN) != LAPTIMER_TRIGGER_ACTIVE_LEVEL) {
     return;
   }
+  ultimoTriggerMs = now;
 
   uint64_t timestampUs = esp_timer_get_time();
   ultimoTimestampUs = timestampUs;

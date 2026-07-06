@@ -17,6 +17,12 @@ volatile uint32_t paquetesPorSegundo = 0;
 volatile uint32_t contadorTemporal   = 0;
 volatile unsigned long tiempoSegundo = 0;
 
+// --- DATOS PARA LA PANTALLA PRINCIPAL ---
+volatile int      ectC                 = -1000; // -1000 = sin dato aún
+volatile int      oilTempC             = -1000;
+volatile uint32_t lastLapMs            = 0;     // 0 = sin vuelta aún
+uint64_t          ultimoLapTimestampUs = 0;
+
 SemaphoreHandle_t mutexDisplay;
 
 // TODO QUITAR LOS CAMPOS QUE NO SE USAN PARA AHORRAR ANCHO DE BANDA (ej. packetId)
@@ -60,36 +66,14 @@ void actualizarOLED() {
   }
 
   // Captura local de volátiles para consistencia durante el dibujado
-  uint32_t rx  = paquetesRecibidos;
-  uint32_t err = paquetesCorruptos;
   float    r   = rssi;
   float    s   = snr;
   uint32_t pps = paquetesPorSegundo;
+  int      ect = ectC;
+  int      oil = oilTempC;
+  uint32_t lap = lastLapMs;
 
-  display.clear();
-
-  // --- LÍNEA 1: Contadores ---
-  display.setFont(ArialMT_Plain_10);
-  display.setTextAlignment(TEXT_ALIGN_LEFT);
-  display.drawString(0, 0, "RX:" + String(rx));
-  display.drawString(55, 0, "ERR:" + String(err));
-
-  display.setTextAlignment(TEXT_ALIGN_RIGHT);
-  display.drawString(128, 0, String(pps) + "/s");
-  display.setTextAlignment(TEXT_ALIGN_LEFT);
-
-  // --- LÍNEA 2: RSSI grande ---
-  display.setFont(ArialMT_Plain_16);
-  display.drawString(0, 12, String((int)r) + " dBm");
-
-  display.setFont(ArialMT_Plain_10);
-  display.drawString(75, 16, "SNR:" + String(s, 1));
-
-  // --- LÍNEA 3: Barra RSSI ---
-  int barraRSSI = map(constrain((int)r, -120, -30), -120, -30, 0, 100);
-  display.drawProgressBar(0, 28, 120, 8, barraRSSI);
-
-  // --- LÍNEA 4: Calidad de señal ---
+  // Calidad de señal
   String calidad;
   if(r > -70)       calidad = "EXCELENTE";
   else if(r > -85)  calidad = "BUENA";
@@ -99,10 +83,36 @@ void actualizarOLED() {
 
   if(s < 0 && r > -100) calidad = "RUIDOSA";
 
-  display.setFont(ArialMT_Plain_16);
-  display.setTextAlignment(TEXT_ALIGN_CENTER);
-  display.drawString(64, 48, calidad);
+  display.clear();
+
+  // --- LÍNEA 1: paquetes/s + calidad de señal ---
+  display.setFont(ArialMT_Plain_10);
   display.setTextAlignment(TEXT_ALIGN_LEFT);
+  display.drawString(0, 0, String(pps) + " p/s");
+  display.setTextAlignment(TEXT_ALIGN_RIGHT);
+  display.drawString(128, 0, calidad);
+  display.setTextAlignment(TEXT_ALIGN_LEFT);
+
+  // --- LÍNEA 2: temperaturas ECT / OIL ---
+  display.setFont(ArialMT_Plain_10);
+  display.drawString(0, 13, "ECT");
+  display.drawString(68, 13, "OIL");
+  display.setFont(ArialMT_Plain_16);
+  display.drawString(0, 23, (ect > -1000) ? String(ect) + "C" : "---");
+  display.drawString(68, 23, (oil > -1000) ? String(oil) + "C" : "---");
+
+  // --- LÍNEA 3: última vuelta ---
+  display.setFont(ArialMT_Plain_10);
+  display.drawString(0, 47, "LAP");
+  display.setFont(ArialMT_Plain_16);
+  if(lap > 0) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%u:%02u.%03u",
+             (unsigned)(lap / 60000u), (unsigned)((lap % 60000u) / 1000u), (unsigned)(lap % 1000u));
+    display.drawString(28, 44, String(buf));
+  } else {
+    display.drawString(28, 44, "-:--.---");
+  }
 
   display.display();
 }
@@ -228,6 +238,23 @@ void loop() {
       Serial.println();
 
       // Todo este bloque no se puede quitar
+
+      // --- Decodificar datos para la pantalla principal ---
+      if(packet.canId == 929 && packet.len >= 6) {
+        // DBC engine_temp (0x3A1): ect en bytes 2-3, oil_temp en bytes 4-5
+        // (little-endian, 1 C/LSB, sin offset)
+        ectC     = (int)((uint16_t)packet.data[2] | ((uint16_t)packet.data[3] << 8));
+        oilTempC = (int)((uint16_t)packet.data[4] | ((uint16_t)packet.data[5] << 8));
+      } else if(packet.canId == 0x777 && packet.len >= 8) {
+        // Laptimer: timestamp uint64 en us; la vuelta es la diferencia entre
+        // dos pasadas consecutivas (el doble pulso ya se filtra en el LT)
+        uint64_t ts;
+        memcpy(&ts, packet.data, sizeof(ts));
+        if(ultimoLapTimestampUs != 0 && ts > ultimoLapTimestampUs) {
+          lastLapMs = (uint32_t)((ts - ultimoLapTimestampUs) / 1000ULL);
+        }
+        ultimoLapTimestampUs = ts;
+      }
 
     } else {
       paquetesCorruptos++;

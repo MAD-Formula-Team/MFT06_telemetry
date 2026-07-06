@@ -30,6 +30,7 @@ from telemetry_backend import (
     CanWorker,
     DBC_FILE,
     LAPTIME_CSV_COLUMNS,
+    LAPTIMER_MIN_LAP_S,
     SCRIPT_DIR,
     TelemetryDataStore,
 )
@@ -1878,6 +1879,11 @@ class TelemetryWindow(QMainWindow):
                 continue
 
             lap_s = ts - self.session_last_lt_ts
+            if lap_s < LAPTIMER_MIN_LAP_S:
+                # Segundo pulso del sensor IR en la misma pasada (o doble
+                # pulsación de ESPACIO): ignorar sin mover la referencia.
+                continue
+
             self.session_last_lt_ts = ts
             self.session_laps.append(lap_s)
 

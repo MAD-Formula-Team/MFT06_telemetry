@@ -6,32 +6,20 @@ struct CANFilterEntry {
     uint32_t canId;
     uint32_t minIntervalMs;
     uint8_t priority;
+    uint8_t decimation; // conservar 1 de cada N tramas recibidas (1 = todas)
     const char *name;
 };
 
+// Solo se transmiten estos 5 IDs (decimal). El resto de tramas CAN se descarta.
+// El orden importa: selectBest() en TX.cpp asume engine_temp en el índice 0.
+// engine_temp: máximo 1 trama por segundo (minIntervalMs = 1000); los demás
+// sin rate-limit y se reparten los slots LoRa equitativamente entre ellos.
 static const CANFilterEntry CAN_FILTER_TABLE[] = {
-        // ─────────────────────────────────────────────────────────────
-        // PRIORIDAD 0
-        // ─────────────────────────────────────────────────────────────
-        {930, 2000, 0, "engine_press"},
-        {929, 2000, 0, "engine_temp"},
-        {946, 3000, 0, "currents_cooling"},
-
-        // ─────────────────────────────────────────────────────────────
-        // PRIORIDAD 1
-        // ─────────────────────────────────────────────────────────────
-        {931, 4000, 1, "engine_fuel"},
-        {933, 5000, 1, "engine_misc"},
-        {945, 6000, 1, "curr_engine"},
-        {993, 6000, 1, "node_temp_1"},
-        {994, 6000, 1, "node_temp_2"},
-
-        // ─────────────────────────────────────────────────────────────
-        // PRIORIDAD 2
-        // ─────────────────────────────────────────────────────────────
-        {176, 6000, 2, "steering"},
-        {932, 8000, 2, "engine_speed"},
-        {947, 8000, 2, "curr_other"},
+        {929, 1000, 0, 1,  "engine_temp"},   // 0x3A1: 1 vez por segundo
+        {931, 0,    1, 1,  "engine_fuel"},   // 0x3A3
+        {932, 0,    2, 20, "engine_speed"},  // 0x3A4: solo 1 de cada 20 tramas
+        {933, 0,    1, 1,  "engine_misc"},   // 0x3A5
+        {176, 0,    2, 1,  "steering"},      // 0x0B0
 };
 
 #define FILTER_TABLE_SIZE (sizeof(CAN_FILTER_TABLE) / sizeof(CAN_FILTER_TABLE[0]))
