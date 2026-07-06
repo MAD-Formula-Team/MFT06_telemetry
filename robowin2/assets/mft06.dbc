@@ -1,0 +1,159 @@
+VERSION ""
+
+
+NS_ : 
+	NS_DESC_
+	CM_
+	BA_DEF_
+	BA_
+	VAL_
+	CAT_DEF_
+	CAT_
+	FILTER
+	BA_DEF_DEF_
+	EV_DATA_
+	ENVVAR_DATA_
+	SGTYPE_
+	SGTYPE_VAL_
+	BA_DEF_SGTYPE_
+	BA_SGTYPE_
+	SIG_TYPE_REF_
+	VAL_TABLE_
+	SIG_GROUP_
+	SIG_VALTYPE_
+	SIGTYPE_VALTYPE_
+	BO_TX_BU_
+	BA_DEF_REL_
+	BA_REL_
+	BA_DEF_DEF_REL_
+	BU_SG_REL_
+	BU_EV_REL_
+	BU_BO_REL_
+	SG_MUL_VAL_
+
+BS_:
+
+BU_: GS SW ECU PDM IMU SN1 SN2 SN3 FLX
+
+BO_ 896 heartbeat_gs: 1 GS
+ SG_ gs_id : 0|8@1+ (1,0) [0|0] "" Vector__XXX
+
+BO_ 912 heartbeat_sw: 1 SW
+ SG_ sw_id : 0|8@1+ (1,0) [0|0] "" Vector__XXX
+
+BO_ 944 heartbeat_pdm: 1 PDM
+ SG_ pdm_id : 0|8@1+ (1,0) [0|0] "" Vector__XXX
+
+BO_ 929 engine_temp: 6 ECU
+ SG_ iat : 0|16@1+ (1,0) [0|0] "C" Vector__XXX
+ SG_ ect : 16|16@1+ (1,0) [0|0] "C" Vector__XXX
+ SG_ oil_temp : 32|16@1+ (1,0) [0|0] "C" Vector__XXX
+
+BO_ 930 engine_press: 6 ECU
+ SG_ fuel_press : 0|16@1+ (1,0) [0|0] "kPa" Vector__XXX
+ SG_ oil_press : 16|16@1+ (1,0) [0|0] "kPa" Vector__XXX
+ SG_ map : 32|16@1+ (1,0) [0|0] "kPa" Vector__XXX
+
+BO_ 931 engine_fuel: 6 ECU
+ SG_ lamda : 0|16@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ fuel_consump : 16|16@1+ (1,0) [0|0] "ccmin^-1" Vector__XXX
+ SG_ tp : 32|16@1+ (1,0) [0|0] "%" Vector__XXX
+
+BO_ 932 engine_speed: 7 ECU
+ SG_ gear : 0|8@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ rear_left_speed : 8|16@1+ (1,0) [0|0] "kph" Vector__XXX
+ SG_ rear_right_speed : 24|16@1+ (1,0) [0|0] "kph" Vector__XXX
+ SG_ engine_rpm : 40|16@1+ (1,0) [0|0] "rpm" Vector__XXX
+
+BO_ 933 engine_misc: 7 ECU
+ SG_ batt_volt : 0|16@1+ (1,0) [0|0] "V" Vector__XXX
+ SG_ ecu_temp : 16|8@1+ (1,0) [0|0] "C" Vector__XXX
+ SG_ engine_in : 24|16@1+ (1,0) [0|0] "C" Vector__XXX
+ SG_ carter_temp : 40|16@1+ (1,0) [0|0] "C" Vector__XXX
+
+BO_ 945 currents_engine: 8 PDM
+ SG_ alternator_current : 7|16@0+ (1,0) [0|0] "A" Vector__XXX
+ SG_ ignition_current : 23|16@0+ (1,0) [0|0] "A" Vector__XXX
+ SG_ injection_current : 39|16@0+ (1,0) [0|0] "A" Vector__XXX
+ SG_ fuel_pump_current : 55|16@0+ (1,0) [0|0] "A" Vector__XXX
+
+BO_ 946 currents_cooling: 8 PDM
+ SG_ water_pump_current : 7|16@0+ (1,0) [0|0] "A" Vector__XXX
+ SG_ main_fan_current : 23|16@0+ (1,0) [0|0] "A" Vector__XXX
+ SG_ non_prior_current : 39|16@0+ (1,0) [0|0] "A" Vector__XXX
+ SG_ temp_pdm : 55|16@0+ (1,0) [0|0] "C" Vector__XXX
+
+BO_ 947 currents_other: 8 PDM
+ SG_ prior_current : 7|16@0+ (1,0) [0|0] "A" Vector__XXX
+
+BO_ 961 pos_cart: 8 IMU
+ SG_ latitude : 0|32@1- (1,0) [-90|90] "deg" Vector__XXX
+ SG_ longitude : 32|32@1- (1,0) [-180|180] "deg" Vector__XXX
+
+BO_ 962 pos_eul: 6 IMU
+ SG_ yaw_angle : 0|16@1- (1,0) [0|0] "rad" Vector__XXX
+ SG_ pitch_angle : 16|16@1- (1,0) [0|0] "rad" Vector__XXX
+ SG_ roll_angle : 32|16@1- (1,0) [0|0] "rad" Vector__XXX
+
+BO_ 963 vel_cart: 6 IMU
+ SG_ velocity_x : 0|16@1- (1,0) [0|0] "m/s" Vector__XXX
+ SG_ velocity_y : 16|16@1- (1,0) [0|0] "m/s" Vector__XXX
+ SG_ velocity_z : 32|16@1- (1,0) [0|0] "m/s" Vector__XXX
+
+BO_ 964 vel_eul: 6 IMU
+ SG_ yaw_rate : 0|16@1- (1,0) [0|0] "rad/s" Vector__XXX
+ SG_ pitch_rate : 16|16@1- (1,0) [0|0] "rad/s" Vector__XXX
+ SG_ roll_rate : 32|16@1- (1,0) [0|0] "rad/s" Vector__XXX
+
+BO_ 965 accel_cart: 6 IMU
+ SG_ accel_x : 0|16@1- (1,0) [0|0] "m/s^2" Vector__XXX
+ SG_ accel_y : 16|16@1- (1,0) [0|0] "m/s^s" Vector__XXX
+ SG_ accel_z : 32|16@1- (1,0) [0|0] "m/s^2" Vector__XXX
+
+BO_ 966 auto_values: 7 IMU
+ SG_ angle_track : 0|16@1+ (1,0) [0|0] "rad" Vector__XXX
+ SG_ angle_slip : 16|16@1+ (1,0) [0|0] "rad" Vector__XXX
+ SG_ curvature_radius : 32|16@1+ (1,0) [0|0] "m" Vector__XXX
+ SG_ auto_status : 48|8@1+ (1,0) [0|0] "" Vector__XXX
+
+BO_ 967 pos_cart_acc: 6 IMU
+ SG_ latitude_acc : 0|16@1+ (1,0) [0|0] "m" Vector__XXX
+ SG_ longitude_acc : 16|16@1+ (1,0) [0|0] "m" Vector__XXX
+ SG_ altitude_acc : 32|16@1+ (1,0) [0|0] "m" Vector__XXX
+
+BO_ 968 pos_eul_acc: 6 IMU
+ SG_ roll_acc : 0|16@1+ (1,0) [0|0] "rad" Vector__XXX
+ SG_ pitch_acc : 16|16@1+ (1,0) [0|0] "rad" Vector__XXX
+ SG_ yaw_acc : 32|16@1+ (1,0) [0|0] "rad" Vector__XXX
+
+BO_ 969 status_imu: 8 IMU
+ SG_ time_stamp : 0|32@1+ (1,0) [0|0] "microsec" Vector__XXX
+ SG_ imu_status : 32|16@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ temp_imu : 48|16@1- (0.01,0) [0|0] "" Vector__XXX
+
+BO_ 934 influx_digital: 1 FLX
+ SG_ digital : 0|8@1+ (1,0) [0|0] "" Vector__XXX
+
+BO_ 176 steering: 8 Vector__XXX
+ SG_ steering_wheel_angle : 0|16@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ brake_pressure : 16|16@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ front_left_wheel_speed : 32|16@1+ (1,0) [0|0] "kph" Vector__XXX
+ SG_ front_right_wheel_speed : 48|16@1+ (1,0) [0|0] "kph" Vector__XXX
+
+BO_ 177 dampers: 4 Vector__XXX
+ SG_ front_left_damper : 0|16@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ front_right_damper : 16|16@1+ (1,0) [0|0] "" Vector__XXX
+
+BO_ 993 node_temp_1: 8 Vector__XXX
+ SG_ node_pcb_temp : 7|16@0+ (1,0) [0|0] "C" Vector__XXX
+ SG_ temp1 : 23|16@0+ (1,0) [0|0] "C" Vector__XXX
+ SG_ temp2 : 39|16@0+ (1,0) [0|0] "C" Vector__XXX
+ SG_ temp3 : 55|16@0+ (1,0) [0|0] "C" Vector__XXX
+
+BO_ 994 node_temp_2: 8 Vector__XXX
+ SG_ temp4 : 7|16@0+ (1,0) [0|0] "C" Vector__XXX
+
+
+
+BA_DEF_ BO_  "GenMsgCycleTime" INT 0 65535;
+BA_DEF_DEF_  "GenMsgCycleTime" 0;

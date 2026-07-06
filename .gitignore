@@ -6,3 +6,7 @@ __pycache__/
 UI/build/
 UI/dist/
 UI/sessions_autosave.csv
+robowin2/build/
+robowin2/dist/
+robowin2/*.spec
+.pytest_cache/

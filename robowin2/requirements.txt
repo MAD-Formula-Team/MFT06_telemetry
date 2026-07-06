@@ -1,0 +1,11 @@
+# Núcleo (fase 1) — sin Qt
+cantools>=39
+pyserial>=3.5
+numpy>=1.26
+
+# UI (fase 2+)
+PySide6>=6.6
+pyqtgraph>=0.13
+
+# Desarrollo
+pytest>=8
