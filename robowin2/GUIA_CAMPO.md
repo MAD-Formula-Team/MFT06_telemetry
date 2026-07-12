@@ -25,9 +25,12 @@
    - Windows: `%LOCALAPPDATA%\ROBOWIN2\robowin_AAAAMMDD.db`
    - Linux: `~/.local/share/ROBOWIN2/robowin_AAAAMMDD.db`
    No hay botón de guardar: no se puede olvidar.
-5. Cronometraje: página **LAP TIMER** → modo + nombre → **INICIAR**. El
-   skidpad se cierra solo a las 4 vueltas con la nota FS. Las sesiones y
-   vueltas quedan en el mismo .db.
+5. Cronometraje: página **LAP TIMER** → modo + nombre → **INICIAR**. El botón
+   deja la sesión ARMADA: el crono arranca con el primer trigger (señal del
+   laptimer o barra **ESPACIO**). Cada ESPACIO posterior cierra una vuelta
+   manual, igual que la señal (funciona en DASHBOARD y LAP TIMER; pulsos de
+   menos de 3 s se ignoran como fantasma). El skidpad se cierra solo a las
+   4 vueltas con la nota FS. Las sesiones y vueltas quedan en el mismo .db.
 
 ## Después
 

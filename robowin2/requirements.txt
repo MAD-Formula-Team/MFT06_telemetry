@@ -2,6 +2,7 @@
 cantools>=39
 pyserial>=3.5
 numpy>=1.26
+python-can>=4.5  # fuente Robotell USB-CAN
 
 # UI (fase 2+)
 PySide6>=6.6

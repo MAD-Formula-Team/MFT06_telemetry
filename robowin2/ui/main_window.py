@@ -1,12 +1,14 @@
 """Ventana principal: navbar de marca, control de fuente y stack de páginas."""
 from __future__ import annotations
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -25,6 +27,9 @@ from .pages.offline import OfflinePage
 from .pages.senales import SenalesPage
 
 REFRESH_MS = 100
+
+# Índices de página donde ESPACIO cuenta como trigger manual de vuelta
+SPACE_TRIGGER_PAGES = (0, 2)  # DASHBOARD y LAP TIMER
 
 
 class MainWindow(QMainWindow):
@@ -63,6 +68,17 @@ class MainWindow(QMainWindow):
 
         nav_layout.addStretch()
 
+        # Fuente de datos: receptor ESP32 (CSV por radio) o Robotell USB-CAN (cable)
+        self.source_mode = "esp32"
+        self.source_btn = QPushButton("FUENTE: ESP32")
+        self.source_btn.setMaximumHeight(30)
+        self.source_btn.setToolTip(
+            "Alterna la fuente CAN: receptor ESP32 (radio) o adaptador Robotell USB-CAN (cable).\n"
+            "Se aplica al pulsar CONECTAR."
+        )
+        self.source_btn.clicked.connect(self.toggle_source_mode)
+        nav_layout.addWidget(self.source_btn)
+
         self.port_selector = QComboBox()
         self.port_selector.setMinimumWidth(200)
         self.port_selector.setMaximumHeight(30)
@@ -75,7 +91,7 @@ class MainWindow(QMainWindow):
         refresh_btn.setToolTip("Actualizar lista de puertos")
         refresh_btn.clicked.connect(self.refresh_ports)
         nav_layout.addWidget(refresh_btn)
-        self._tool_buttons = [refresh_btn]
+        self._tool_buttons = [self.source_btn, refresh_btn]
 
         self.connect_btn = QPushButton("CONECTAR")
         self.connect_btn.setMaximumHeight(30)
@@ -117,6 +133,23 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self._tick)
         self.timer.start()
 
+        # ESPACIO = trigger manual de vuelta (filtro global: los botones
+        # con foco se comerían la tecla si se dejara llegar hasta ellos)
+        QApplication.instance().installEventFilter(self)
+
+    def eventFilter(self, obj, event) -> bool:
+        if (
+            event.type() == QEvent.Type.KeyPress
+            and event.key() == Qt.Key.Key_Space
+            and not event.isAutoRepeat()
+            and self.ctx.sessions.is_running
+            and self.stack.currentIndex() in SPACE_TRIGGER_PAGES
+            and not isinstance(QApplication.focusWidget(), QLineEdit)
+        ):
+            self.ctx.manual_lap_trigger()
+            return True
+        return super().eventFilter(obj, event)
+
     # --- fuente de datos ---
 
     def refresh_ports(self) -> None:
@@ -131,6 +164,12 @@ class MainWindow(QMainWindow):
                 self.port_selector.setCurrentIndex(idx)
         self.port_selector.blockSignals(False)
 
+    def toggle_source_mode(self) -> None:
+        self.source_mode = "robotell" if self.source_mode == "esp32" else "esp32"
+        self.source_btn.setText(f"FUENTE: {self.source_mode.upper()}")
+        if self.ctx.source is not None:
+            self.statusBar().showMessage("La nueva fuente se aplicará al reconectar", 5000)
+
     def toggle_connection(self) -> None:
         if self.ctx.source is not None:
             self.ctx.stop_source()
@@ -140,7 +179,10 @@ class MainWindow(QMainWindow):
         if not device:
             QMessageBox.warning(self, "Sin puerto", "No hay ningún puerto serie seleccionado.")
             return
-        self.ctx.connect_serial(device)
+        if self.source_mode == "robotell":
+            self.ctx.connect_robotell(device)
+        else:
+            self.ctx.connect_serial(device)
         self.connect_btn.setText("DESCONECTAR")
 
     def open_replay(self) -> None:
@@ -191,6 +233,7 @@ class MainWindow(QMainWindow):
             page.apply_theme()
 
     def closeEvent(self, event) -> None:
+        QApplication.instance().removeEventFilter(self)
         self.timer.stop()
         self.ctx.shutdown()
         event.accept()

@@ -174,6 +174,21 @@ class OfflinePage(QWidget):
         self.lap_hint.setProperty("class", "hint")
         self.lap_hint.setWordWrap(True)
         laps_layout.addWidget(self.lap_hint)
+
+        # Comparador A/B (como en ROBOWIN 1)
+        compare_row = QHBoxLayout()
+        compare_row.setSpacing(4)
+        self.compare_a = QComboBox()
+        self.compare_a.setToolTip("Vuelta A (roja)")
+        compare_row.addWidget(self.compare_a, 1)
+        self.compare_b = QComboBox()
+        self.compare_b.setToolTip("Vuelta B (azul)")
+        compare_row.addWidget(self.compare_b, 1)
+        compare_btn = QPushButton("COMPARAR")
+        compare_btn.setStyleSheet(thm.action_button_style("#455a64"))
+        compare_btn.clicked.connect(self._compare_laps)
+        compare_row.addWidget(compare_btn)
+        laps_layout.addLayout(compare_row)
         left_layout.addWidget(laps_group, 1)
 
         splitter.addWidget(left)
@@ -265,6 +280,19 @@ class OfflinePage(QWidget):
                 self.laps_table.setItem(row, col, QTableWidgetItem(value))
         self.laps_table.blockSignals(False)
 
+        # Selectores del comparador A/B (índice del dataset como data:
+        # los números de vuelta pueden repetirse entre sesiones)
+        for combo in (self.compare_a, self.compare_b):
+            combo.blockSignals(True)
+            combo.clear()
+            for idx, lap in enumerate(dataset.laps):
+                label = f"V{lap.number}" + (f" · {lap.session_name}" if lap.session_name else "")
+                combo.addItem(label, idx)
+            combo.blockSignals(False)
+        if len(dataset.laps) > 1:
+            self.compare_b.setCurrentIndex(len(dataset.laps) - 1)
+        self.lap_hint.setText("SELECCIONA UNA VUELTA PARA ENFOCAR LA TELEMETRIA")
+
         # Auto-activar hasta 3 señales con datos
         for key in dataset.signal_keys:
             if len(self.plots) >= 3:
@@ -304,6 +332,29 @@ class OfflinePage(QWidget):
                 plot.plot_widget.setXLink(None)
             else:
                 plot.plot_widget.setXLink(anchor.plot_widget)
+
+    def _compare_laps(self) -> None:
+        if self.dataset is None:
+            return
+        idx_a = self.compare_a.currentData()
+        idx_b = self.compare_b.currentData()
+        if idx_a is None or idx_b is None:
+            return
+        lap_a = self.dataset.laps[idx_a]
+        lap_b = self.dataset.laps[idx_b]
+        for plot in self.plots.values():
+            plot.show_compare_regions(
+                (lap_a.t_start_s, lap_a.t_end_s), (lap_b.t_start_s, lap_b.t_end_s)
+            )
+        delta = lap_b.lap_time_s - lap_a.lap_time_s
+        sign = "+" if delta >= 0 else "-"
+        color_a, color_b = SignalPlot.COMPARE_COLORS
+        self.lap_hint.setText(
+            f"COMPARANDO <span style='color:{color_a};'><b>V{lap_a.number}</b></span>"
+            f" vs <span style='color:{color_b};'><b>V{lap_b.number}</b></span>: "
+            f"{format_lap_time(lap_a.lap_time_s)} vs {format_lap_time(lap_b.lap_time_s)}"
+            f" | Δ={sign}{abs(delta):.3f}s"
+        )
 
     def _on_lap_selected(self, row: int, _col: int, _prev_row: int, _prev_col: int) -> None:
         if self.dataset is None or not (0 <= row < len(self.dataset.laps)):

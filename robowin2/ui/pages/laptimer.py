@@ -150,7 +150,8 @@ class LapTimerPage(QWidget):
         sessions.start(self.name_input.text().strip(), mode)
         self.start_stop_btn.setText("DETENER")
         self.start_stop_btn.setStyleSheet(thm.action_button_style("#8f2c2c"))
-        self.session_status.setText(f"{mode} EN CURSO — esperando triggers del laptimer")
+        self.session_status.setText(f"{mode} ARMADO — el crono arranca con el primer ESPACIO o trigger")
+        self.setFocus()  # que el foco no quede en un botón: ESPACIO = vuelta
 
     def _finalize(self) -> None:
         summary = self.ctx.sessions.stop()
@@ -202,6 +203,9 @@ class LapTimerPage(QWidget):
 
         if not stats["running"]:
             return
+
+        if sessions.has_started:
+            self.session_status.setText(f"{stats['mode']} EN CURSO — ESPACIO = vuelta manual")
 
         self.last_label.setText(format_lap_time(stats["last_s"]))
         self.best_label.setText(format_lap_time(stats["best_s"]))

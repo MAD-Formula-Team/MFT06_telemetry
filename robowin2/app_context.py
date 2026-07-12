@@ -18,7 +18,7 @@ from robowin2.core.lapstore import LapTimer
 from robowin2.core.pipeline import Pipeline
 from robowin2.core.rawlog import RawLogReader, RawLogWriter
 from robowin2.core.sessions import SessionManager
-from robowin2.core.sources import ReplaySource, SerialSource
+from robowin2.core.sources import ReplaySource, RobotellSource, SerialSource
 
 
 class AppContext:
@@ -29,7 +29,7 @@ class AppContext:
         self.laptimer = LapTimer()
         self.sessions = SessionManager(self.laptimer, writer_provider=lambda: self._rawlog)
 
-        self.source: SerialSource | ReplaySource | None = None
+        self.source: SerialSource | RobotellSource | ReplaySource | None = None
         self.pipeline: Pipeline | None = None
         self._rawlog: RawLogWriter | None = None
         self._replay_mode = False
@@ -64,6 +64,14 @@ class AppContext:
     # --- fuentes ---
 
     def connect_serial(self, device: str) -> None:
+        """Conecta al receptor ESP32 (protocolo CSV por serie/radio)."""
+        self._connect_live(SerialSource, device)
+
+    def connect_robotell(self, device: str) -> None:
+        """Conecta a un adaptador Robotell USB-CAN (bus CAN por cable)."""
+        self._connect_live(RobotellSource, device)
+
+    def _connect_live(self, source_cls: type, device: str) -> None:
         self.stop_source()
         self._replay_mode = False
         self._rawlog = RawLogWriter(
@@ -73,9 +81,10 @@ class AppContext:
             self.decoder, self.datastore, self.bus_stats,
             rawlog=self._rawlog, laptimer=self.laptimer,
             on_lap=self.sessions.on_lap,
+            on_trigger=self.sessions.notify_trigger,
             session_id_provider=lambda: self.sessions.active_db_id,
         )
-        self.source = SerialSource(device, on_frame=self.pipeline.on_frame, on_status=self._set_status)
+        self.source = source_cls(device, on_frame=self.pipeline.on_frame, on_status=self._set_status)
         self.source.start()
 
     def open_replay_frames(self, frames: list[RawFrame], realtime: bool = True, speed: float = 1.0) -> None:
@@ -89,6 +98,7 @@ class AppContext:
             self.decoder, self.datastore, self.bus_stats,
             rawlog=None, laptimer=self.laptimer,
             on_lap=self.sessions.on_lap,
+            on_trigger=self.sessions.notify_trigger,
         )
         self.source = ReplaySource(
             frames, on_frame=self.pipeline.on_frame, on_status=self._set_status,
@@ -108,6 +118,29 @@ class AppContext:
         reader.close()
         self.open_replay_frames(frames, realtime=realtime, speed=speed)
         return len(frames)
+
+    def manual_lap_trigger(self) -> None:
+        """Trigger manual (barra espaciadora): mismo camino que la señal del
+        laptimer. El primero arranca el crono; los siguientes cierran vuelta.
+
+        Usa el monotónico local, el mismo reloj con el que SerialSource
+        timestampa los frames en vivo.
+        """
+        t_s = time.monotonic()
+        self.sessions.notify_trigger()
+        lap = self.laptimer.on_trigger(t_s)
+        if lap is None:
+            return
+        self.datastore.add_sample("laptimer_last_lap_s", t_s, lap.lap_time_s)
+        if self._rawlog is not None:
+            try:
+                self._rawlog.write_lap(
+                    lap.number, int(t_s * 1e6), lap.lap_time_s,
+                    session_id=self.sessions.active_db_id,
+                )
+            except Exception:
+                pass  # sin persistencia, la vuelta sigue contando en la sesión
+        self.sessions.on_lap(lap)
 
     def stop_source(self) -> None:
         if self.source is not None:

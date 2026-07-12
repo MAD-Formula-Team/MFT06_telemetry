@@ -98,16 +98,22 @@ def test_senales_row_lifecycle(qapp, loaded_ctx):
     window.switch_page(1)
     senales = window.pages[1]
 
-    senales.checkboxes["ect"].setChecked(True)
+    senales.cards["ect"].toggle()
     assert "ect" in senales.rows
     window._tick()
     assert senales.rows["ect"][1].value_label.text() == "114.0"
 
-    senales.search.setText("rpm")
-    assert senales.checkboxes["ect"].isHidden()
-    assert not senales.checkboxes["engine_rpm"].isHidden()
+    # La tarjeta de la lista muestra valor vivo y frescura del dato en el borde
+    assert senales.cards["ect"].value_label.text() == "114.0"
+    assert senales.cards["ect"]._border_key == "good"  # último dato = ahora (replay)
+    assert senales.cards["engine_rpm"].value_label.text() == "--"
+    assert senales.cards["engine_rpm"]._border_key == "border"  # sin datos
 
-    senales.checkboxes["ect"].setChecked(False)
+    senales.search.setText("rpm")
+    assert senales.cards["ect"].isHidden()
+    assert not senales.cards["engine_rpm"].isHidden()
+
+    senales.cards["ect"].toggle()
     assert "ect" not in senales.rows
     window.close()
 
@@ -175,6 +181,102 @@ def test_offline_page_dataset_and_lap_focus(qapp, loaded_ctx, dbc_path, tmp_path
     assert "VUELTA 1" in page.lap_hint.text()
     for plot in page.plots.values():
         assert plot._lap_region is not None and plot._lap_region.isVisible()
+    window.close()
+
+
+def test_space_key_manual_lap(qapp, loaded_ctx, monkeypatch):
+    """ESPACIO = trigger manual: arma el crono al primer pulso y cierra
+    vueltas después; inactivo sin sesión o fuera de DASHBOARD/LAP TIMER."""
+    import time as time_mod
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    window = _make_window(qapp, loaded_ctx)
+    window.switch_page(2)
+    page = window.pages[2]
+    ctx = loaded_ctx
+
+    # Sin sesión activa: el espacio no hace nada
+    QTest.keyClick(window, Qt.Key.Key_Space)
+    assert ctx.laptimer._reference_t_s is None
+
+    fake = {"t": 1000.0}
+    monkeypatch.setattr(time_mod, "monotonic", lambda: fake["t"])
+
+    page.mode_selector.setCurrentText("AUTOCROSS")
+    page.toggle_session()
+    assert ctx.sessions.is_running
+    assert ctx.sessions.elapsed_s() is None  # INICIAR no arranca el crono
+
+    QTest.keyClick(window, Qt.Key.Key_Space)  # primer espacio: arranca el crono
+    assert ctx.sessions.has_started
+    assert ctx.sessions.live_stats()["laps"] == []
+
+    fake["t"] = 1012.5
+    QTest.keyClick(window, Qt.Key.Key_Space)  # segundo espacio: vuelta de 12.5 s
+    assert ctx.sessions.live_stats()["laps"] == [12.5]
+    assert abs(ctx.sessions.elapsed_s() - 12.5) < 1e-6
+
+    # El dashboard refleja la vuelta manual
+    window.switch_page(0)
+    window._tick()
+    dashboard = window.pages[0]
+    assert dashboard.laps_count_label.text() == "VUELTAS: 1"
+    assert "EN CURSO" in dashboard.session_state_label.text()
+
+    # En una página sin trigger (SEÑALES) el espacio no cuenta
+    window.switch_page(1)
+    fake["t"] = 1030.0
+    QTest.keyClick(window, Qt.Key.Key_Space)
+    assert ctx.sessions.live_stats()["laps"] == [12.5]
+
+    ctx.sessions.stop()
+    window.close()
+
+
+def test_offline_lap_compare(qapp, loaded_ctx, dbc_path, tmp_path):
+    """Comparador A/B: combos poblados, regiones en las gráficas y delta."""
+    import cantools
+
+    from robowin2.core.decoder import DbcDecoder
+    from robowin2.core.rawlog import RawLogWriter
+    from robowin2.io_ import offline as offline_io
+
+    db = cantools.database.load_file(dbc_path)
+    writer = RawLogWriter(tmp_path / "ui_cmp.db")
+    for i in range(30):
+        payload = db.encode_message(929, {"iat": 25, "ect": 80 + i, "oil_temp": 90 + i})
+        writer.write(RawFrame(t_us=i * 1_000_000, can_id=929, data=payload))
+    sid = writer.begin_session("UI CMP", "AUTOCROSS")
+    writer.write_lap(1, 10_000_000, 8.0, session_id=sid)
+    writer.write_lap(2, 20_000_000, 9.5, session_id=sid)
+    writer.end_session(sid)
+    writer.close()
+
+    dataset = offline_io.load_db(tmp_path / "ui_cmp.db", DbcDecoder(dbc_path))
+
+    window = _make_window(qapp, loaded_ctx)
+    window.switch_page(4)
+    page = window.pages[4]
+    page.load_dataset(dataset)
+
+    # Combos poblados; B apunta por defecto a la última vuelta
+    assert page.compare_a.count() == 2 and page.compare_b.count() == 2
+    assert page.compare_a.currentData() == 0
+    assert page.compare_b.currentData() == 1
+
+    page._compare_laps()
+    assert "V1" in page.lap_hint.text() and "V2" in page.lap_hint.text()
+    assert "Δ=+1.500s" in page.lap_hint.text()
+    for plot in page.plots.values():
+        assert all(region.isVisible() for region in plot._compare_regions)
+
+    # Seleccionar una vuelta individual oculta la comparación
+    page.laps_table.setCurrentCell(0, 0)
+    for plot in page.plots.values():
+        assert not any(region.isVisible() for region in plot._compare_regions)
+        assert plot._lap_region.isVisible()
     window.close()
 
 

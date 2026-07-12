@@ -31,7 +31,9 @@ class SessionManager:
         with self._lock:
             self._laptimer.reset()
             self.active = Session(name=name or f"{mode}_{datetime.now():%H%M%S}", mode=mode)
-            self._started_monotonic = time.monotonic()
+            # Sesión ARMADA: el crono no arranca con el botón, sino con el
+            # primer trigger (señal del laptimer o barra espaciadora).
+            self._started_monotonic = None
             self._auto_complete = False
 
             writer = self._writer_provider()
@@ -41,6 +43,13 @@ class SessionManager:
                     self.active_db_id = writer.begin_session(self.active.name, mode)
                 except Exception:
                     self.active_db_id = None  # sin persistencia, la sesión sigue
+
+    def notify_trigger(self) -> None:
+        """Cualquier trigger del laptimer (señal o manual): el primero de la
+        sesión arranca el crono."""
+        with self._lock:
+            if self.active is not None and self._started_monotonic is None:
+                self._started_monotonic = time.monotonic()
 
     def on_lap(self, lap: Lap) -> None:
         """Callback del pipeline: una vuelta válida cerrada."""
@@ -83,8 +92,13 @@ class SessionManager:
     def should_auto_finalize(self) -> bool:
         return self._auto_complete
 
+    @property
+    def has_started(self) -> bool:
+        """True si el crono ya arrancó (llegó el primer trigger)."""
+        return self._started_monotonic is not None
+
     def elapsed_s(self) -> float | None:
-        """Crono de sesión (desde INICIAR, reloj local)."""
+        """Crono de sesión (desde el primer trigger, reloj local)."""
         if self._started_monotonic is None:
             return None
         return time.monotonic() - self._started_monotonic

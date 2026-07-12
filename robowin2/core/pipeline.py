@@ -26,6 +26,7 @@ class Pipeline:
         rawlog: RawLogWriter | None = None,
         laptimer: LapTimer | None = None,
         on_lap: LapCallback | None = None,
+        on_trigger: Callable[[], None] | None = None,
         session_id_provider: Callable[[], int | None] | None = None,
     ):
         self._decoder = decoder
@@ -34,6 +35,7 @@ class Pipeline:
         self._rawlog = rawlog
         self._laptimer = laptimer
         self._on_lap = on_lap
+        self._on_trigger = on_trigger
         self._session_id_provider = session_id_provider
         self.frames_processed = 0
         self.frames_unknown = 0
@@ -63,6 +65,8 @@ class Pipeline:
         if frame.can_id == LAPTIMER_CAN_ID:
             trigger_s = laptimer_timestamp_s(frame)
             if trigger_s is not None and self._laptimer is not None:
+                if self._on_trigger is not None:
+                    self._on_trigger()
                 lap = self._laptimer.on_trigger(trigger_s)
                 if lap is not None:
                     self._datastore.add_sample("laptimer_last_lap_s", frame.t_s, lap.lap_time_s)

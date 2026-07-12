@@ -1,7 +1,19 @@
-"""Dashboard: variables críticas con umbrales + temperaturas combinadas + RPM."""
+"""Dashboard: laptime en vivo + variables críticas con umbrales + temperaturas y RPM."""
 from __future__ import annotations
 
-from PySide6.QtWidgets import QGroupBox, QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QFont
+from PySide6.QtWidgets import (
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from robowin2.core.lapstore import format_lap_time
 
 from .. import theme as thm
 from ..widgets import MetricCard, SignalPlot
@@ -46,7 +58,46 @@ class DashboardPage(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
-        # --- Columna izquierda: tarjetas críticas ---
+        # --- Columna 1: laptime en vivo (como en ROBOWIN 1) ---
+        laptime_group = QGroupBox("LAPTIME")
+        laptime_layout = QVBoxLayout(laptime_group)
+        laptime_layout.setContentsMargins(8, 8, 8, 8)
+        laptime_layout.setSpacing(8)
+
+        self.session_mode_label = QLabel("SESION ACTUAL: --")
+        self.session_mode_label.setProperty("class", "accent-title")
+        laptime_layout.addWidget(self.session_mode_label)
+
+        self.session_state_label = QLabel("ESTADO: LISTO")
+        self.session_state_label.setProperty("class", "chip")
+        laptime_layout.addWidget(self.session_state_label)
+
+        self.total_time_label = QLabel("00:00.000")
+        self.total_time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.total_time_label.setProperty("class", "timer-big")
+        laptime_layout.addWidget(self.total_time_label)
+
+        summary_row = QHBoxLayout()
+        summary_row.setSpacing(6)
+        self.laps_count_label = QLabel("VUELTAS: 0")
+        self.last_lap_label = QLabel("ULTIMA: --:--.---")
+        for label in (self.laps_count_label, self.last_lap_label):
+            label.setProperty("class", "chip")
+            summary_row.addWidget(label)
+        laptime_layout.addLayout(summary_row)
+
+        self.laps_table = QTableWidget(0, 4)
+        self.laps_table.setHorizontalHeaderLabels(["VUELTA", "TIEMPO", "DELTA", "ESTADO"])
+        self.laps_table.verticalHeader().setVisible(False)
+        self.laps_table.setAlternatingRowColors(True)
+        self.laps_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        header = self.laps_table.horizontalHeader()
+        header.setSectionResizeMode(1, header.ResizeMode.Stretch)
+        laptime_layout.addWidget(self.laps_table, 1)
+
+        layout.addWidget(laptime_group, 1)
+
+        # --- Columna 2: tarjetas críticas ---
         cards_group = QGroupBox("VARIABLES CRITICAS")
         cards_layout = QVBoxLayout(cards_group)
         cards_layout.setContentsMargins(8, 8, 8, 8)
@@ -66,7 +117,7 @@ class DashboardPage(QWidget):
         cards_layout.addStretch()
         layout.addWidget(cards_group, 1)
 
-        # --- Columna derecha: gráficas ---
+        # --- Columna 3: gráficas ---
         plots_group = QGroupBox("GRAFICAS")
         plots_layout = QVBoxLayout(plots_group)
         plots_layout.setContentsMargins(8, 8, 8, 8)
@@ -101,6 +152,7 @@ class DashboardPage(QWidget):
         layout.addWidget(plots_group, 3)
 
     def refresh(self) -> None:
+        self._refresh_laptime()
         for key, card in self.cards.items():
             latest = self.ctx.datastore.latest(key)
             if latest is None:
@@ -110,6 +162,53 @@ class DashboardPage(QWidget):
                 card.set_value(value, color=threshold_color(key, value))
         for plot in self.plots:
             plot.refresh(self.ctx.datastore)
+
+    def _refresh_laptime(self) -> None:
+        sessions = self.ctx.sessions
+        stats = sessions.live_stats()
+
+        if not stats["running"]:
+            self.session_mode_label.setText("SESION ACTUAL: --")
+            self.session_state_label.setText("ESTADO: LISTO")
+            self.total_time_label.setText("00:00.000")
+            self.laps_count_label.setText("VUELTAS: 0")
+            self.last_lap_label.setText("ULTIMA: --:--.---")
+            self.laps_table.setRowCount(0)
+            return
+
+        self.session_mode_label.setText(f"SESION ACTUAL: {stats['mode']}")
+        self.session_state_label.setText(
+            "ESTADO: EN CURSO — ESPACIO = VUELTA"
+            if sessions.has_started
+            else "ESTADO: ARMADO — ESPACIO ARRANCA EL CRONO"
+        )
+        elapsed = sessions.elapsed_s()
+        self.total_time_label.setText(format_lap_time(elapsed) if elapsed is not None else "00:00.000")
+
+        times = stats["laps"]
+        self.laps_count_label.setText(f"VUELTAS: {len(times)}")
+        last = stats["last_s"]
+        self.last_lap_label.setText(f"ULTIMA: {format_lap_time(last)}" if last is not None else "ULTIMA: --:--.---")
+
+        best = min(times) if times else None
+        self.laps_table.setRowCount(len(times))
+        for idx, lap_time in enumerate(times):
+            delta = lap_time - best if best is not None else 0.0
+            state = "BEST" if abs(delta) < 1e-9 else ("LAST" if idx == len(times) - 1 else "")
+            cells = [
+                str(idx + 1),
+                format_lap_time(lap_time),
+                f"+{delta:.3f}s" if delta > 0 else "0.000s",
+                state,
+            ]
+            for col, value in enumerate(cells):
+                item = QTableWidgetItem(value)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                if state == "BEST":
+                    item.setForeground(QColor(thm.theme()["good"]))
+                    if col == 1:
+                        item.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+                self.laps_table.setItem(idx, col, item)
 
     def apply_theme(self) -> None:
         for plot in self.plots:

@@ -235,6 +235,7 @@ class SignalPlot(QWidget):
 
     def show_lap_region(self, t0: float, t1: float) -> None:
         """Resalta el rango de una vuelta y enfoca la vista en él."""
+        self._hide_compare_regions()
         if getattr(self, "_lap_region", None) is None:
             self._lap_region = pg.LinearRegionItem(movable=False, brush=pg.mkBrush(255, 79, 0, 45))
             self._lap_region.setZValue(-10)
@@ -243,6 +244,32 @@ class SignalPlot(QWidget):
         self._lap_region.setVisible(True)
         pad = max(0.5, (t1 - t0) * 0.1)
         self.plot_widget.setXRange(t0 - pad, t1 + pad, padding=0)
+
+    # Colores del comparador A/B (mismos que ROBOWIN 1: rojo vs azul)
+    COMPARE_COLORS = ("#ff6b6b", "#4dabf7")
+
+    def show_compare_regions(self, a: tuple[float, float], b: tuple[float, float]) -> None:
+        """Resalta dos vueltas (A roja, B azul) y abarca ambas en la vista."""
+        if getattr(self, "_lap_region", None) is not None:
+            self._lap_region.setVisible(False)
+        if getattr(self, "_compare_regions", None) is None:
+            self._compare_regions = []
+            for color in self.COMPARE_COLORS:
+                region = pg.LinearRegionItem(movable=False, brush=pg.mkBrush(color + "2d"))
+                region.setZValue(-10)
+                self.plot_widget.addItem(region)
+                self._compare_regions.append(region)
+        for region, (t0, t1) in zip(self._compare_regions, (a, b)):
+            region.setRegion([t0, t1])
+            region.setVisible(True)
+        lo = min(a[0], b[0])
+        hi = max(a[1], b[1])
+        pad = max(0.5, (hi - lo) * 0.05)
+        self.plot_widget.setXRange(lo - pad, hi + pad, padding=0)
+
+    def _hide_compare_regions(self) -> None:
+        for region in getattr(self, "_compare_regions", None) or []:
+            region.setVisible(False)
 
     def apply_theme(self) -> None:
         t = thm.theme()

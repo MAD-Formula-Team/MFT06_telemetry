@@ -21,6 +21,7 @@ def _build(dbc_path, writer):
         DbcDecoder(dbc_path), DataStore(), BusStats(),
         rawlog=writer, laptimer=laptimer,
         on_lap=sessions.on_lap,
+        on_trigger=sessions.notify_trigger,
         session_id_provider=lambda: sessions.active_db_id,
     )
     return sessions, pipeline
@@ -32,10 +33,12 @@ def test_skidpad_session_full_cycle_with_persistence(dbc_path, tmp_path):
 
     sessions.start("SKIDPAD TEST", MODE_SKIDPAD)
     assert sessions.is_running and sessions.active_db_id is not None
+    assert not sessions.has_started  # armada: el crono espera al primer trigger
 
     # 5 pasadas -> 4 vueltas: 10, 11, 12, 9 s (FS = (10+9)/2 = 9.5)
     for t in [100.0, 110.0, 121.0, 133.0, 142.0]:
         pipeline.on_frame(_trigger_frame(t))
+    assert sessions.has_started  # el primer trigger de la señal arrancó el crono
 
     assert sessions.should_auto_finalize()
     stats = sessions.live_stats()
@@ -76,6 +79,28 @@ def test_laps_outside_session_have_no_session_id(dbc_path, tmp_path):
     laps = reader.laps(run_id)
     assert len(laps) == 1 and laps[0]["session_id"] is None
     reader.close()
+
+
+def test_crono_starts_on_first_trigger_not_on_button(dbc_path):
+    laptimer = LapTimer()
+    sessions = SessionManager(laptimer, writer_provider=lambda: None)
+
+    sessions.start("ARMADO", MODE_AUTOCROSS)
+    assert sessions.is_running
+    assert not sessions.has_started
+    assert sessions.elapsed_s() is None  # INICIAR no arranca el crono
+
+    sessions.notify_trigger()  # primer espacio/señal
+    assert sessions.has_started
+    assert sessions.elapsed_s() >= 0.0
+
+    sessions.notify_trigger()  # triggers posteriores no reinician el crono
+    first = sessions._started_monotonic
+    sessions.notify_trigger()
+    assert sessions._started_monotonic == first
+
+    sessions.stop()
+    assert sessions.elapsed_s() is None
 
 
 def test_autocross_no_auto_finalize_and_no_writer(dbc_path):
