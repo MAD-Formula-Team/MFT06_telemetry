@@ -7,7 +7,7 @@
 // ================================================================
 // LOGGING — comentar para deshabilitar en producción (sin USB)
 // ================================================================
-#define SERIAL_LOGGING_ENABLED
+// #define SERIAL_LOGGING_ENABLED
 
 #ifdef SERIAL_LOGGING_ENABLED
   #define LOG(...)  Serial.print(__VA_ARGS__)
@@ -20,7 +20,11 @@
 #endif
 
 // #define HB_CHECK_ENABLED
-// #define FUEL_CONSUMPTION_CALC
+#define FUEL_CONSUMPTION_CALC
+
+// Límite duro de transmisión: cap de seguridad para no superar este ritmo
+// aunque el modo sin límites esté activo en banco.
+#define MAX_TX_PACKETS_PER_SECOND 10u
 
 // ================================================================
 // MODO SIN LIMITES — SOLO BANCO/CABLE, NUNCA EN AIRE
@@ -144,6 +148,7 @@ namespace lora_timing {
 
     constexpr uint32_t DUTY_CYCLE_PERCENT = 10u;
     constexpr uint32_t TX_INTERVAL_MS = TOA_MS * (100u / DUTY_CYCLE_PERCENT);
+    constexpr uint32_t MAX_TX_RATE_INTERVAL_MS = 1000u / MAX_TX_PACKETS_PER_SECOND;
 
     // ── Verificaciones en tiempo de compilación ───────────────────
     static_assert(LORA_SF >= 7 && LORA_SF <= 12, "LORA_SF debe estar entre 7 y 12");
@@ -152,6 +157,7 @@ namespace lora_timing {
                   "LORA_BW_KHZ debe ser 125, 250 o 500");
     static_assert(TOA_MS > 0u, "ToA calculado es 0: revisa los parametros LoRa");
     static_assert(TX_INTERVAL_MS >= TOA_MS, "TX_INTERVAL_MS < ToA: imposible cumplir el duty cycle");
+    static_assert(MAX_TX_RATE_INTERVAL_MS > 0u, "MAX_TX_PACKETS_PER_SECOND invalido");
 
 } // namespace lora_timing
 

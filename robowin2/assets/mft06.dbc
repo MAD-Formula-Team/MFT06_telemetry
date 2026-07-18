@@ -1,7 +1,7 @@
 VERSION ""
 
 
-NS_ : 
+NS_ :
 	NS_DESC_
 	CM_
 	BA_DEF_
@@ -66,7 +66,7 @@ BO_ 932 engine_speed: 7 ECU
  SG_ engine_rpm : 40|16@1+ (1,0) [0|0] "rpm" Vector__XXX
 
 BO_ 933 engine_misc: 7 ECU
- SG_ batt_volt : 0|16@1+ (1,0) [0|0] "V" Vector__XXX
+ SG_ batt_volt : 0|16@1+ (0.01,0) [0|0] "V" Vector__XXX
  SG_ ecu_temp : 16|8@1+ (1,0) [0|0] "C" Vector__XXX
  SG_ engine_in : 24|16@1+ (1,0) [0|0] "C" Vector__XXX
  SG_ carter_temp : 40|16@1+ (1,0) [0|0] "C" Vector__XXX

@@ -10,6 +10,7 @@
 #include "heartbeat_config.hpp"
 
 static volatile bool lvPending[FILTER_TABLE_SIZE];
+static volatile bool lvHasData[FILTER_TABLE_SIZE];
 
 static TelemetryPacket lvBuf[FILTER_TABLE_SIZE];
 static volatile uint32_t lastQueuedMs[FILTER_TABLE_SIZE];
@@ -49,13 +50,10 @@ static int selectBest() {
     static int loop_counter = 0;
 
     static constexpr int schedule[16] = {
-        0, 2, 1, 3,
-        0, 4, 1, 5,
-        0, 6, 1, 7,
-        0, 8, 1, 9,
+            0, 1, 2
     };
 
-    const int best = schedule[loop_counter & 0x0F];
+    const int best = schedule[loop_counter % 3];
     ++loop_counter;
     return best;
 }
@@ -69,10 +67,17 @@ void taskLoRa(void *pvParameters) {
 
         if (xSemaphoreTake(pendingMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
             const int current_can_id = selectBest();
-            if (current_can_id >= 0 && lvPending[current_can_id]) {
-                telemetry_packet = lvBuf[current_can_id];
-                lvPending[current_can_id] = false;
-                got_packet = true;
+            if (current_can_id >= 0) {
+                if (lvPending[current_can_id]) {
+                    telemetry_packet = lvBuf[current_can_id];
+                    lvPending[current_can_id] = false;
+                    got_packet = true;
+                } else if (lvHasData[current_can_id]) {
+                    // No hay trama nueva en este slot, enviar la última muestra
+                    // conocida para garantizar que las tres trazas roten.
+                    telemetry_packet = lvBuf[current_can_id];
+                    got_packet = true;
+                }
             }
             xSemaphoreGive(pendingMutex);
         }
@@ -141,6 +146,7 @@ void setup() {
 
     for (int i = 0; i < static_cast<int>(FILTER_TABLE_SIZE); i++) {
         lvPending[i] = false;
+        lvHasData[i] = false;
         lastQueuedMs[i] = 0;
     }
 
@@ -241,10 +247,23 @@ void loop() {
 
     if (rate_ok) {
         if (xSemaphoreTake(pendingMutex, pdMS_TO_TICKS(1)) == pdTRUE) {
+            // Si el mensaje es engine_misc (933) y la batería viene en voltios
+            // como entero (p.ej. 12), convertir a centésimas (1200) para enviar
+            // con resolución de 0.01 V/LSB en el enlace.
+            if (rxId == 933 && rxLen >= 2) {
+                uint16_t raw = (uint16_t) rxBuf[0] | ((uint16_t) rxBuf[1] << 8);
+                // Forzar siempre envío en centésimas (0.01 V/LSB)
+                uint32_t scaled = (uint32_t) raw * 100u; // centésimas
+                if (scaled > 65535u) scaled = 65535u;
+                rxBuf[0] = (uint8_t) (scaled & 0xFF);
+                rxBuf[1] = (uint8_t) (scaled >> 8);
+            }
+
             lvBuf[current_can_id].canId = static_cast<uint16_t>(rxId); // FIXME: sobra?
             lvBuf[current_can_id].len = rxLen; // FIXME: sobra?
             memcpy(lvBuf[current_can_id].data, rxBuf, 8);
             lvBuf[current_can_id].packetId = seqNum++;
+            lvHasData[current_can_id] = true;
             lvPending[current_can_id] = true;
             lastQueuedMs[current_can_id] = now;
             xSemaphoreGive(pendingMutex);

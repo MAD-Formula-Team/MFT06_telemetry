@@ -20,6 +20,7 @@ volatile unsigned long tiempoSegundo = 0;
 // --- DATOS PARA LA PANTALLA PRINCIPAL ---
 volatile int      ectC                 = -1000; // -1000 = sin dato aún
 volatile int      oilTempC             = -1000;
+volatile float    battVolt             = -1000.0;
 volatile uint32_t lastLapMs            = 0;     // 0 = sin vuelta aún
 uint64_t          ultimoLapTimestampUs = 0;
 
@@ -71,6 +72,7 @@ void actualizarOLED() {
   uint32_t pps = paquetesPorSegundo;
   int      ect = ectC;
   int      oil = oilTempC;
+  float    batt = battVolt;
   uint32_t lap = lastLapMs;
 
   // Calidad de señal
@@ -91,6 +93,13 @@ void actualizarOLED() {
   display.drawString(0, 0, String(pps) + " p/s");
   display.setTextAlignment(TEXT_ALIGN_RIGHT);
   display.drawString(128, 0, calidad);
+  display.setTextAlignment(TEXT_ALIGN_LEFT);
+
+  // Mostrar voltaje batería (arriba derecha, fuente pequeña)
+  display.setFont(ArialMT_Plain_10);
+  display.setTextAlignment(TEXT_ALIGN_RIGHT);
+  if(batt > -1000.0) display.drawString(128, 13, String(batt, 1) + "V");
+  else               display.drawString(128, 13, "---");
   display.setTextAlignment(TEXT_ALIGN_LEFT);
 
   // --- LÍNEA 2: temperaturas ECT / OIL ---
@@ -254,6 +263,14 @@ void loop() {
           lastLapMs = (uint32_t)((ts - ultimoLapTimestampUs) / 1000ULL);
         }
         ultimoLapTimestampUs = ts;
+      }
+      else if(packet.canId == 933 && packet.len >= 2) {
+        // DBC engine_misc (0x3A5 / 933): batt_volt en bytes 0-1 (little-endian)
+        // Ahora el emisor manda centésimas (0.01 V/LSB), convertir a V.
+        uint16_t raw = (uint16_t)packet.data[0] | ((uint16_t)packet.data[1] << 8);
+        battVolt = ((float)raw) * 0.01f;
+        // Debug: mostrar raw y voltaje calculado por Serial
+        Serial.printf("[RX] CAN 0x%03X batt raw=%u -> %.2fV\n", packet.canId, (unsigned)raw, battVolt);
       }
 
     } else {

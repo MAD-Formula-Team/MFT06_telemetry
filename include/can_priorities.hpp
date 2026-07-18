@@ -17,9 +17,7 @@ struct CANFilterEntry {
 static const CANFilterEntry CAN_FILTER_TABLE[] = {
         {929, 1000, 0, 1,  "engine_temp"},   // 0x3A1: 1 vez por segundo
         {931, 0,    1, 1,  "engine_fuel"},   // 0x3A3
-        {932, 0,    2, 20, "engine_speed"},  // 0x3A4: solo 1 de cada 20 tramas
         {933, 0,    1, 1,  "engine_misc"},   // 0x3A5
-        {176, 0,    2, 1,  "steering"},      // 0x0B0
 };
 
 #define FILTER_TABLE_SIZE (sizeof(CAN_FILTER_TABLE) / sizeof(CAN_FILTER_TABLE[0]))
