@@ -10,7 +10,7 @@ from collections.abc import Callable
 from .bus_stats import BusStats
 from .datastore import DataStore
 from .decoder import DbcDecoder
-from .frames import LAPTIMER_CAN_ID, RawFrame, laptimer_timestamp_s
+from .frames import LAPTIMER_CAN_ID, LORA_METRICS_CAN_ID, RawFrame, laptimer_timestamp_s, lora_metrics
 from .lapstore import Lap, LapTimer
 from .rawlog import RawLogWriter
 
@@ -59,9 +59,20 @@ class Pipeline:
         name = self._decoder.name_for(frame.can_id)
         if frame.can_id == LAPTIMER_CAN_ID:
             name = "laptimer"
+        elif frame.can_id == LORA_METRICS_CAN_ID:
+            name = "lora_metrics"
         self._bus_stats.on_frame(frame.t_us, frame.can_id, frame.data, name)
 
-        # 3) Laptimer (fuera del DBC)
+        # 3) Métricas LoRa (fuera del DBC, pseudo-ID de la base)
+        if frame.can_id == LORA_METRICS_CAN_ID:
+            metrics = lora_metrics(frame)
+            if metrics is not None:
+                rssi, snr = metrics
+                self._datastore.add_sample("lora_rssi", frame.t_s, rssi)
+                self._datastore.add_sample("lora_snr", frame.t_s, snr)
+            return
+
+        # 4) Laptimer (fuera del DBC)
         if frame.can_id == LAPTIMER_CAN_ID:
             trigger_s = laptimer_timestamp_s(frame)
             if trigger_s is not None and self._laptimer is not None:
@@ -77,7 +88,7 @@ class Pipeline:
                         self._on_lap(lap)
             return
 
-        # 4) Señales DBC
+        # 5) Señales DBC
         signals = self._decoder.decode(frame.can_id, frame.data)
         if signals is None:
             if name is None:

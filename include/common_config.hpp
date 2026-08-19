@@ -50,12 +50,27 @@
 // CONFIGURACIÓN LoRa
 // ================================================================
 #define LORA_BAND 869.5f // MHz  — sub-banda h1.7 (869.4–869.65)
-#define LORA_SF 7 // Spreading Factor 7–12
+// SF y CR subidos desde 7/4-7 para más alcance dentro de los límites legales
+// de la sub-banda (potencia y banda sin tocar). Con PL=15 B, BW=125 kHz:
+//   SF7  CR4/7 → ToA=57ms  → intervalo min. 570ms/paquete al 10% DC
+//   SF9  CR4/8 → ToA=215ms → intervalo min. 2150ms/paquete al 10% DC
+// Con 3 IDs rotando (selectBest() en TX.cpp), cada uno se actualiza cada
+// ~1.7s a SF7 y ~6.5s a SF9: aceptable para antena/banco, pero revisar antes
+// de correr si la telemetría necesita refrescos más rápidos en carrera.
+#define LORA_SF 9 // Spreading Factor 7–12 (+SF = +sensibilidad, +tiempo de aire)
 #define LORA_BW 125.0f // kHz  — float para RadioLib
 #define LORA_BW_KHZ 125u // kHz  — entero para aritmética constexpr
-#define LORA_CR 7 // Denominador: 5=4/5, 6=4/6, 7=4/7, 8=4/8
+#define LORA_CR 8 // Denominador: 5=4/5, 6=4/6, 7=4/7, 8=4/8 (8 = máxima robustez)
 #define LORA_PREAMBLE 8 // Símbolos de preámbulo
-#define LORA_POWER 22 // dBm conducido
+#define LORA_POWER 22 // dBm conducido — ya en el máximo legal de esta sub-banda
+
+// Pseudo-ID CAN reservado (no es una trama CAN real) para que la base (RX)
+// mande al PC el RSSI/SNR del último paquete recibido, por el mismo puerto
+// serie y protocolo CSV que el resto de tramas. Mismo patrón que el
+// pseudo-ID del laptimer (0x777): robowin2/core/frames.py lo reconoce y lo
+// desvía a "lora_rssi"/"lora_snr" en vez de intentar decodificarlo con el DBC.
+// Payload (4 bytes): int16 LE rssi_dBm×10, int16 LE snr_dB×10.
+#define LORA_METRICS_ID 0x7F1
 
 // ================================================================
 // PINES CAN (MCP2515 Externo)

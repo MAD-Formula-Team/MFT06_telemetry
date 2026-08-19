@@ -1,4 +1,4 @@
-from robowin2.core.frames import RawFrame, format_line, laptimer_timestamp_s, parse_line
+from robowin2.core.frames import RawFrame, format_line, laptimer_timestamp_s, lora_metrics, parse_line
 
 
 def test_parse_valid_line():
@@ -43,3 +43,14 @@ def test_laptimer_timestamp_extraction():
     assert laptimer_timestamp_s(frame) == ts_us / 1e6
     assert laptimer_timestamp_s(RawFrame(0, 0x3A1, b"\x00" * 8)) is None
     assert laptimer_timestamp_s(RawFrame(0, 0x777, b"\x00" * 4)) is None
+
+
+def test_lora_metrics_extraction():
+    # -63.5 dBm, 9.2 dB: mismo empaquetado que RX.cpp (int16 LE, x10)
+    data = (-635).to_bytes(2, "little", signed=True) + (92).to_bytes(2, "little", signed=True)
+    frame = RawFrame(t_us=0, can_id=0x7F1, data=data)
+    rssi, snr = lora_metrics(frame)
+    assert rssi == -63.5
+    assert snr == 9.2
+    assert lora_metrics(RawFrame(0, 0x3A1, data)) is None  # ID equivocado
+    assert lora_metrics(RawFrame(0, 0x7F1, b"\x00\x00")) is None  # payload corto

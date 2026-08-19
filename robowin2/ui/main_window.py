@@ -114,6 +114,13 @@ class MainWindow(QMainWindow):
         self.status_label.setMaximumWidth(340)
         nav_layout.addWidget(self.status_label)
 
+        # RSSI/SNR del último paquete LoRa recibido: visible en todas las
+        # páginas (no solo en el dashboard) para poder ver la potencia en
+        # vivo mientras se prueban antenas sin tener que cambiar de pestaña.
+        self.lora_label = QLabel("LoRa: --")
+        self.lora_label.setMaximumWidth(220)
+        nav_layout.addWidget(self.lora_label)
+
         root.addWidget(navbar)
 
         # --- Páginas ---
@@ -211,6 +218,32 @@ class MainWindow(QMainWindow):
         self.status_label.setStyleSheet(thm.status_chip_style(level))
         if self.ctx.source is None and self.connect_btn.text() != "CONECTAR":
             self.connect_btn.setText("CONECTAR")
+        self._refresh_lora_label()
+
+    def _refresh_lora_label(self) -> None:
+        rssi_sample = self.ctx.datastore.latest("lora_rssi")
+        snr_sample = self.ctx.datastore.latest("lora_snr")
+        if rssi_sample is None:
+            self.lora_label.setText("LoRa: --")
+            self.lora_label.setStyleSheet(thm.status_chip_style("warn"))
+            return
+        _t, rssi = rssi_sample
+        snr = snr_sample[1] if snr_sample is not None else None
+
+        # Mismos umbrales que el OLED de la base (src/base_rx/RX.cpp),
+        # para que el número que se ve en pista y en la app coincidan.
+        if rssi > -70:
+            level = "info"
+        elif rssi > -100:
+            level = "warn"
+        else:
+            level = "error"
+
+        text = f"LoRa: {rssi:.0f}dBm"
+        if snr is not None:
+            text += f" / {snr:.1f}dB"
+        self.lora_label.setText(text)
+        self.lora_label.setStyleSheet(thm.status_chip_style(level))
 
     # --- tema / navegación ---
 

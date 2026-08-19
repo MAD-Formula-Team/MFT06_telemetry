@@ -28,6 +28,19 @@ THRESHOLDS = {
 
 CRITICAL_KEYS = ["ect", "oil_temp", "batt_volt"]
 
+# Umbrales de RSSI (dBm), iguales a los del OLED de la base
+# (src/base_rx/RX.cpp) para que el "calidad" visual coincida en ambos sitios.
+RSSI_THRESHOLDS = {"warn": -100.0, "danger": -115.0}
+
+
+def rssi_color(rssi: float) -> str:
+    t = thm.theme()
+    if rssi <= RSSI_THRESHOLDS["danger"]:
+        return t["danger"]
+    if rssi <= RSSI_THRESHOLDS["warn"]:
+        return t["warn"]
+    return t["good"]
+
 
 def threshold_color(key: str, value: float) -> str | None:
     rule = THRESHOLDS.get(key)
@@ -114,6 +127,14 @@ class DashboardPage(QWidget):
             )
             self.cards[key] = card
             cards_layout.addWidget(card)
+
+        # RSSI/SNR del enlace LoRa: útil sobre todo durante pruebas de
+        # antena (comparar alcance/potencia entre modelos).
+        self.rssi_card = MetricCard(title="RSSI LORA", unit="dBm", color=thm.GRAPH_COLORS[3])
+        self.snr_card = MetricCard(title="SNR LORA", unit="dB", color=thm.GRAPH_COLORS[4])
+        cards_layout.addWidget(self.rssi_card)
+        cards_layout.addWidget(self.snr_card)
+
         cards_layout.addStretch()
         layout.addWidget(cards_group, 1)
 
@@ -160,6 +181,17 @@ class DashboardPage(QWidget):
             else:
                 _t, value = latest
                 card.set_value(value, color=threshold_color(key, value))
+
+        rssi_latest = self.ctx.datastore.latest("lora_rssi")
+        if rssi_latest is None:
+            self.rssi_card.set_value(None)
+        else:
+            _t, rssi = rssi_latest
+            self.rssi_card.set_value(rssi, color=rssi_color(rssi))
+
+        snr_latest = self.ctx.datastore.latest("lora_snr")
+        self.snr_card.set_value(snr_latest[1] if snr_latest is not None else None)
+
         for plot in self.plots:
             plot.refresh(self.ctx.datastore)
 

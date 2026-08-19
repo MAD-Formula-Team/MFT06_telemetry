@@ -11,6 +11,12 @@ from dataclasses import dataclass
 # ID del laptimer (fuera del DBC): payload = timestamp uint64 little-endian en µs
 LAPTIMER_CAN_ID = 0x777
 
+# Pseudo-ID reservado (fuera del DBC, no es una trama CAN real): RSSI/SNR del
+# último paquete LoRa recibido por la base. Ver LORA_METRICS_ID en
+# include/common_config.hpp — mismo pseudo-ID en ambos lados.
+# Payload: int16 LE rssi_dBm×10, int16 LE snr_dB×10.
+LORA_METRICS_CAN_ID = 0x7F1
+
 # Máximo ID CAN extendido (29 bits)
 _MAX_CAN_ID = 0x1FFF_FFFF
 
@@ -68,3 +74,12 @@ def laptimer_timestamp_s(frame: RawFrame) -> float | None:
     if frame.can_id != LAPTIMER_CAN_ID or len(frame.data) < 8:
         return None
     return int.from_bytes(frame.data[:8], byteorder="little", signed=False) / 1_000_000.0
+
+
+def lora_metrics(frame: RawFrame) -> tuple[float, float] | None:
+    """Extrae (rssi_dBm, snr_dB) de un frame del pseudo-ID de métricas LoRa."""
+    if frame.can_id != LORA_METRICS_CAN_ID or len(frame.data) < 4:
+        return None
+    rssi_x10 = int.from_bytes(frame.data[0:2], byteorder="little", signed=True)
+    snr_x10 = int.from_bytes(frame.data[2:4], byteorder="little", signed=True)
+    return rssi_x10 / 10.0, snr_x10 / 10.0
